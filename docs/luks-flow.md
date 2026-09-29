@@ -75,7 +75,16 @@ Browser -> Browser: erase K/KEK/temp keys
 
 These transport arrows are conceptual, not a specified cryptographic protocol. Both directions require authenticated encryption and endpoint/ceremony binding. The exact ordering/transaction protocol requires refinement so a crash cannot leave an unknown or unrecoverable state. Malicious UI delivery is an accepted risk, as described in `SECURITY.md`.
 
-## Normal unlock
+## Already-unlocked storage
+
+Every action request still requires daemon-verified authentication and user
+authorization. If `wudod` verifies that the configured mapping refers to the
+expected LUKS device, it can start the configured systemd unit without requesting
+PRF output, unwrapping K, or transporting K. The daemon decides this from local
+state, never from UI/web claims. Exact race handling and mapping verification
+remain to be specified; stale or ambiguous state must not permit startup.
+
+## Normal unlock (storage locked)
 
 ```plantuml
 @startuml
@@ -117,7 +126,7 @@ Agent -> Agent: authenticate/decrypt transport -> K
 Agent -> LUKS: unlock using K via safe input channel
 LUKS --> Agent: unlocked
 Agent -> Agent: erase K
-Agent -> Agent: execute configured paperless.start
+Agent -> Agent: request start of configured systemd unit
 @enduml
 ```
 
@@ -133,6 +142,10 @@ start Docker
 docker compose up -d
 ```
 
-Wudo should not accept those commands from the browser. They are administrator-defined implementation details of the fixed `paperless.start` action.
+Wudo does not accept these commands from the browser. Its responsibility is to
+ensure the configured LUKS volume is unlocked, then explicitly request start of
+one fixed systemd unit. The administrator-configured units handle mounting and
+application startup, including preventing startup on the wrong filesystem.
+A general script runner or operation-sequencing language is not required.
 
 Stopping/locking is a separate action and does not necessarily require the secret.

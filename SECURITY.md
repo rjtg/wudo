@@ -102,6 +102,15 @@ Therefore Unix-socket possession alone must not implicitly mean "authorized for 
 
 Challenges must be short-lived, single-use, and bound to the intended operation. Detailed ceremony schemas, replay handling, and secret-operation binding remain open. Authenticated encryption between the UI and daemon protects secret transport; its exact protocol and endpoint key authentication remain to be specified.
 
+## Conditional secret use
+
+Authentication and action authorization apply even when storage is already
+unlocked. Only daemon verification of the expected device mapping may satisfy
+the unlock prerequisite without a secret. UI/web claims, a matching mapping
+name alone, or stale observations are insufficient. Secret-wrapper eligibility
+is required when unwrapping a key, not when an already-satisfied prerequisite
+requires no key. No plaintext key cache is introduced.
+
 ## Availability and abuse controls
 
 Bound:

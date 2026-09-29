@@ -25,7 +25,11 @@ paperless-luks
   state: UNINITIALIZED
 ```
 
-The action cannot successfully execute until the secret is `READY`.
+An operation that needs to unlock storage cannot execute until its secret is
+`READY` and the credential can unwrap it. For an ensure-unlocked prerequisite,
+a daemon-verified existing mapping satisfies the prerequisite without secret
+use. Authentication and action authorization still apply; see
+[operations and prerequisites](domain-model.md#operations-and-prerequisites).
 
 This avoids a bootstrap cycle between action definition, user authorization, credential enrollment and secret creation.
 

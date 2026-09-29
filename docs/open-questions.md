@@ -44,27 +44,33 @@ Define fallback behavior when PRF is unavailable.
 
 Tracking: [#15](https://github.com/rjtg/wudo/issues/15).
 
-Decide which objects live in static root-owned configuration versus mutable privileged state:
-- actions;
-- secret definitions;
-- users;
-- authorizations;
-- credentials.
+A [draft schema and validation contract](configuration-proposal.md) with a
+[Paperless example](../examples/paperless.actions.toml) is ready for review;
+it is not yet an approved schema or implemented parser.
 
-Prefer a model that remains auditable and recoverable.
+Decided: root-owned configuration defines available actions, fixed targets,
+secret definitions, and limits. The daemon manages users, credentials and
+authorization grants, with grant/revoke/list operations through the local
+administrative CLI. Wrappers and provisioning state are daemon-managed.
+
+Still specify schema/versioning, IDs, bounds, reload semantics, persistence,
+revocation timing, and administrative IPC. Offline structural validation must
+be distinguished from runtime readiness and privileged filesystem checks.
 
 ## 5. Action execution model
 
 Tracking: [#16](https://github.com/rjtg/wudo/issues/16).
 
-Decide whether an action is:
-- one fixed executable + fixed argv;
-- a sequence of typed built-in privileged operations;
-- or both.
+Decided: user-facing actions contain internal operations, not recursive action
+dependencies. Initial shapes are LUKS unlock, fixed systemd unit start/stop,
+and ensure-unlocked then fixed unit start. Systemd handles mounts and application
+orchestration. See [domain model](domain-model.md#operations-and-prerequisites).
 
-Do not use shell scripts merely to avoid specifying this.
-
-Existing administrator-owned scripts may be acceptable as fixed executables, but ownership/permissions and trust implications must be documented.
+An already-unlocked mapping verified by the daemon requires no secret again;
+authentication and authorization still apply. Exact mapping verification,
+state-change/concurrency handling, timeouts, service success criteria, and
+partial-failure behavior remain to be specified. Generic fixed executables or
+administrator scripts are deferred, not implicitly enabled by this decision.
 
 ## 6. Provisioning transaction
 

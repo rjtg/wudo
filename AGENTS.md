@@ -134,11 +134,18 @@ Cryptographic wrapping belongs to an individual credential:
 
 Do not model a passkey as the user itself. A user may have multiple credentials.
 
-An action that requires a secret may exist before the secret has been provisioned. Such an action is not executable until its dependencies are ready.
+An action may reference a secret before provisioning. Operations that actually
+need the secret fail closed until it is ready. A verified, already-unlocked
+LUKS mapping can satisfy an ensure-unlocked prerequisite without secret use;
+authentication and action authorization remain mandatory.
 
 ## Action model
 
-Actions are static administrator-defined capabilities.
+Actions are static administrator-defined capabilities. Internal operations are
+not independently authorized action dependencies. Initial shapes are LUKS
+unlock, fixed systemd unit start/stop, and ensure-unlocked then fixed unit start.
+See `docs/domain-model.md` for conditional secret requirements. The examples
+below are illustrative, not a finalized schema.
 
 Example:
 

@@ -107,3 +107,7 @@ recommended next design task is [configuration schema and validation (#15)](http
 
 Read a task with `gh issue view <number> --repo rjtg/wudo --comments`.
 Reviewed architecture/security decisions remain in the repository documents.
+
+The [configuration proposal](docs/configuration-proposal.md) and
+[Paperless TOML example](examples/paperless.actions.toml) are drafts for review,
+not yet supported configuration.

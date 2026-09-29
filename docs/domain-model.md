@@ -43,6 +43,38 @@ An action may:
 
 Clients refer only to the action ID.
 
+### Operations and prerequisites
+
+An action is a user-facing capability; an operation is an internal privileged
+step. Initial supported shapes are LUKS unlock, start/stop a fixed systemd unit,
+and ensure a configured LUKS volume is unlocked before starting a fixed unit.
+Mounting and application orchestration belong to administrator-configured
+systemd units. This is not a general workflow engine or recursive action graph.
+
+`paperless.start` authorizes its complete configured behavior, including its
+internal unlock prerequisite. A separately exposed `storage.unlock` action
+would have its own grants; neither action implies permission for the other.
+
+Every invocation requires daemon-verified authentication and authorization.
+Secret possession is not authorization. If the daemon verifies that the expected
+LUKS mapping already exists for the configured device, it skips secret
+unwrapping/transport and unlock, then requests the configured unit start.
+A mapping name or a claim from the browser/web service is not sufficient proof.
+
+If unlocking is needed, usable secret material and an eligible credential are
+required. An already-unlocked volume does not require the credential to have a
+secret wrapper, but the credential must still be valid and its user authorized.
+No plaintext key is cached to enable later starts.
+
+Exact mapping verification, concurrency/revalidation, and ceremony binding must
+be specified before implementation. A changed or unverified prerequisite must
+not permit service startup based on stale state. Invalid/ambiguous state fails
+closed; provisioning/rotation recovery policy remains unresolved.
+
+Required tests include locked/unlocked paths, incorrect mappings, stale state,
+unauthorized users, revoked credentials, and missing wrappers when unlock is
+needed versus when a verified mapping already satisfies the prerequisite.
+
 ## Authorization
 
 A policy relationship:
