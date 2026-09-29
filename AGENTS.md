@@ -43,7 +43,8 @@ It may:
 
 It must:
 - have no network listener;
-- never parse HTTP or WebAuthn;
+- never parse HTTP;
+- create WebAuthn challenges and verify registration/authentication responses using an established library;
 - never invoke a shell;
 - never accept an executable path, arbitrary argv, environment variables, or privileged filesystem paths from a remote client;
 - validate every request independently;
@@ -64,11 +65,13 @@ A compromise of `wudo-web` must not automatically become arbitrary root command 
 
 For downstream secrets, the design goal is stronger:
 
-> `wudo-web` must never receive downstream secrets such as a LUKS key in plaintext.
+> In the intended protocol, `wudo-web` relays only ciphertext for downstream secrets such as a LUKS key.
+
+An active compromise that replaces the served UI can steal browser-held secrets during use. This is an accepted risk; UI attestation is out of scope. See `SECURITY.md`.
 
 ### wudo-ui
 
-`wudo-ui` runs in the user's browser.
+`wudo-ui` is written in Rust, compiled to WebAssembly, and served by `wudo-web`. It runs in the user's browser with the browser bindings and generated JavaScript glue needed for WebAuthn.
 
 It is responsible for user interaction, WebAuthn/passkey operations, and — where required — WebAuthn PRF based key derivation.
 
@@ -251,7 +254,7 @@ Current design decision:
 
 - The browser may briefly know plaintext `K`.
 - `wudod` may briefly know plaintext `K`.
-- `wudo-web` must not know plaintext `K`.
+- `wudo-web` relays ciphertext and does not receive plaintext `K` in the intended protocol; malicious UI delivery remains an accepted risk.
 
 During normal use:
 
@@ -290,17 +293,11 @@ Requirements:
 - no generic "execute command" request;
 - no generic privileged filesystem primitive.
 
-Treat authorization grants from `wudo-web` as an unresolved security design area. `wudod` must not blindly accept "the web service says this user authenticated" without a documented agent-verifiable mechanism.
+`wudod` creates WebAuthn challenges and verifies the actual responses. It trusts neither `wudo-web` nor UI claims of authentication, authorization, or confirmation. `wudo-web` is a transport relay, not an issuer of trusted authorization grants.
 
-Potential properties of such a grant:
-- bound to a specific action;
-- bound to an authenticated principal;
-- short expiry;
-- nonce/replay protection;
-- required authentication/confirmation properties;
-- secret requirement binding.
+The daemon must bind each short-lived, single-use challenge to the intended operation, verify the assertion against enrolled public credential material and configured RP ID/origin, and independently enforce user authorization and credential status.
 
-Do not implement this mechanism until it is specified.
+Exact ceremony/IPC schemas, expiry, replay consumption, enrollment binding, and secret-operation binding remain to be specified before implementation. Use an established WebAuthn verifier; do not implement cryptographic primitives. A valid assertion does not prove which action a potentially malicious UI displayed.
 
 ## Logging and audit
 
@@ -330,6 +327,15 @@ Audit records should identify stable IDs and outcomes, not secret material.
 - Use established cryptographic libraries; never implement primitives.
 - Make security-sensitive state transitions explicit.
 - Ensure partial failures leave a recoverable/fail-closed state.
+
+## Language server
+
+Use the rust-analyzer LSP tools when navigating or modifying Rust code.
+
+- Use LSP definitions/references instead of relying only on text search.
+- Check LSP diagnostics after modifying Rust files.
+- Resolve relevant diagnostics before considering a task complete.
+- Still run cargo fmt, cargo clippy, and cargo test as required.
 
 ## Testing expectations
 
@@ -362,3 +368,23 @@ For each task:
 8. Do not expand scope opportunistically.
 
 If the requested implementation conflicts with a security invariant, do not work around the invariant. Document the conflict and request a design decision.
+
+## Task tracking
+
+GitHub Issues in `rjtg/wudo` is the source of truth for task scope, dependencies,
+acceptance criteria, and progress. Start from roadmap issue #20. Use the `gh`
+CLI to read the issue and its comments before starting work, and inspect linked
+prerequisites. For example:
+
+```text
+gh issue list --repo rjtg/wudo
+gh issue view 20 --repo rjtg/wudo --comments
+gh issue view <number> --repo rjtg/wudo --comments
+```
+
+Keep reviewed design specifications in `docs/` and security rules in
+`SECURITY.md`/`AGENTS.md`; link them from issues. Local `tasks/` files are migration
+pointers, not a second backlog. Do not treat issue proposals as approved
+security decisions. When authorized to update issue progress, report actual
+validation and remaining work; do not close an issue solely because an
+unpublished local implementation exists.

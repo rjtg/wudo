@@ -109,4 +109,6 @@ It does not allow plaintext K in:
 
 Browser-to-daemon transfer therefore requires end-to-end encryption with `wudo-web` acting only as a relay.
 
-The exact protocol is open. Do not invent it during implementation.
+Use authenticated end-to-end encryption in both directions, including provisioning. The exact protocol and endpoint key authentication are open. Do not invent them during implementation.
+
+The plaintext restrictions above describe the intended protocol. A compromised `wudo-web` can serve malicious UI that steals browser-held K during use; this is an accepted risk. No UI attestation is planned.

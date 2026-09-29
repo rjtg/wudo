@@ -15,7 +15,9 @@ Responsibilities:
 - perform privileged LUKS operations;
 - expose narrow local IPC.
 
-No HTTP and no WebAuthn parsing.
+Creates WebAuthn challenges and verifies registration/authentication responses using an established library. Checks authorization independently; web/UI claims are untrusted. Detailed ceremony and replay rules remain to be specified.
+
+No HTTP parsing or network listener.
 
 ### `wudo-web`
 
@@ -91,7 +93,9 @@ wudo/
     └── wudo-ui/
 ```
 
-A Rust-based UI is not required. Choose the smallest maintainable browser stack once UI requirements are clearer.
+The UI is written in Rust and compiled to WebAssembly, with browser bindings and generated JavaScript glue as needed. `wudo-web` serves it. The frontend framework remains undecided.
+
+Malicious UI delivery by a compromised `wudo-web` is an accepted risk, including theft of browser-held secrets and misleading action displays. UI attestation is out of scope. Authenticated encryption still keeps plaintext secrets out of intended relay messages.
 
 ## Deployment target
 

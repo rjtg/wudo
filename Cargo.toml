@@ -1,0 +1,16 @@
+[workspace]
+members = [
+    "crates/wudo-core",
+    "crates/wudod",
+    "crates/wudo-web",
+    "crates/wudo-cli",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"

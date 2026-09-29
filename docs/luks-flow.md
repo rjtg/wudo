@@ -73,7 +73,7 @@ Browser -> Browser: erase K/KEK/temp keys
 @enduml
 ```
 
-The exact ordering/transaction protocol requires refinement so a crash cannot leave an unknown or unrecoverable state.
+These transport arrows are conceptual, not a specified cryptographic protocol. Both directions require authenticated encryption and endpoint/ceremony binding. The exact ordering/transaction protocol requires refinement so a crash cannot leave an unknown or unrecoverable state. Malicious UI delivery is an accepted risk, as described in `SECURITY.md`.
 
 ## Normal unlock
 
@@ -92,8 +92,9 @@ User -> Browser: request paperless.start
 
 Browser -> Web: request wrapper/auth challenge
 Web -> Agent: request required data
-Agent --> Web: wrapper + agent transport public data
-Web --> Browser: wrapper + agent transport public data
+Agent -> Agent: create single-use challenge bound to action
+Agent --> Web: challenge + wrapper + agent transport public data
+Web --> Browser: challenge + wrapper + agent transport public data
 
 Browser -> Passkey: WebAuthn authentication + PRF
 Passkey --> Browser: authentication result + PRF output
@@ -102,14 +103,17 @@ Browser -> Browser: derive KEK
 Browser -> Browser: unwrap K
 Browser -> Browser: encrypt K for wudod
 
-Browser -> Web: encrypted K + action request
+Browser -> Web: assertion + encrypted K + action request
 Web -> Agent: relay
 
 note over Web
 wudo-web must never see plaintext K.
 end note
 
-Agent -> Agent: decrypt -> K
+Agent -> Agent: verify assertion, challenge binding/freshness,
+credential status and user authorization; reject on failure
+Agent -> Agent: consume challenge per specified replay protocol
+Agent -> Agent: authenticate/decrypt transport -> K
 Agent -> LUKS: unlock using K via safe input channel
 LUKS --> Agent: unlocked
 Agent -> Agent: erase K

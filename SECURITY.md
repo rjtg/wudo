@@ -22,7 +22,7 @@ Local root administration is the ultimate recovery authority.
 
 `wudo-web` is network-facing and must be treated as potentially fully compromised.
 
-A compromise must not provide arbitrary root execution. For downstream secrets, it must not reveal plaintext secret material merely by virtue of compromising the web service.
+A compromise must not provide arbitrary root execution. In the intended protocol, the web service relays only encrypted downstream secrets. This protects against disclosure through relay payloads; it does not protect against active replacement of the UI served by that service.
 
 ### Browser
 
@@ -33,7 +33,9 @@ It is acceptable for the browser to briefly hold:
 - a derived KEK;
 - plaintext downstream key `K`.
 
-This means a browser compromise at the right moment may steal `K`. This is an explicit accepted risk, not an accidental guarantee.
+A browser compromise at the right moment may steal `K`. A compromised `wudo-web` can also serve malicious UI that steals `K` during subsequent use or misrepresents the action being authenticated. Both are accepted risks. Rust/WASM does not authenticate delivered application code; UI attestation is out of scope.
+
+WebAuthn proves authentication under the verified ceremony conditions, not the integrity of the UI or the action text it displayed. The daemon still independently enforces action binding and user authorization.
 
 ### Passkey authenticator
 
@@ -96,7 +98,9 @@ The design must assume an attacker can control all behavior of `wudo-web`.
 
 Therefore Unix-socket possession alone must not implicitly mean "authorized for every action."
 
-The exact mechanism by which `wudod` verifies that a browser authentication authorizes a particular action remains an open design question. It must include replay and action-binding considerations.
+`wudod` creates WebAuthn challenges, verifies registration/authentication responses using an established library, checks authorization, and executes only fixed administrator-defined actions. It trusts no authentication or authorization claims from the web service or UI. It has no HTTP parser or network listener.
+
+Challenges must be short-lived, single-use, and bound to the intended operation. Detailed ceremony schemas, replay handling, and secret-operation binding remain open. Authenticated encryption between the UI and daemon protects secret transport; its exact protocol and endpoint key authentication remain to be specified.
 
 ## Availability and abuse controls
 
