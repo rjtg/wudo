@@ -70,15 +70,26 @@ Do not treat unresolved cryptographic or authorization protocol details as final
 
 The repository contains a minimal Cargo workspace using stable Rust:
 
-- `crates/wudo-core`: reserved for shared domain/protocol types.
+- `crates/wudo-core`: typed offline action/resource configuration and validation.
 - `crates/wudod`: daemon scaffold.
 - `crates/wudo-web`: web service scaffold.
-- `crates/wudo-cli`: administrative CLI scaffold, with binary name `wudo`.
+- `crates/wudo-cli`: offline configuration validator, with binary name `wudo`.
 - `ui/wudo-ui`: reserved for the Rust/WASM frontend; not yet a Cargo crate.
 
-There are no external crate dependencies. The binaries print an unimplemented
-message and exit with failure. No root privileges are needed; no listeners,
-IPC, process execution, authentication, or secret handling are implemented.
+The core uses a TOML parser; the CLI uses safe Linux file-opening APIs. Daemon
+and web binaries remain dependency-free scaffolds. No root privileges are
+needed; no listeners, IPC, privileged execution, authentication or secret
+handling are implemented.
+
+Validate the example locally:
+
+```text
+cargo run -p wudo-cli -- config validate --file examples/paperless.actions.toml
+```
+
+This checks structural validity only. It does not inspect devices, query systemd,
+contact the daemon, provision secrets, or install configuration. See the
+[configuration contract](docs/configuration-proposal.md) for limits and errors.
 
 Run the same checks as CI from the repository root:
 
@@ -90,8 +101,8 @@ cargo test --workspace --all-features --locked
 
 `rust-toolchain.toml` selects stable Rust with rustfmt and Clippy. Workspace
 members forbid unsafe Rust. Commit `Cargo.lock` to keep dependency resolution
-consistent. The scaffold has no behavioral tests yet; add relevant negative
-tests as security boundaries are implemented.
+consistent. Parser and CLI tests cover malformed/oversized input, strict schema
+and reference checks, safe diagnostics, and offline file handling.
 
 Before implementing behavior, resolve the applicable items in
 [open questions](docs/open-questions.md): configuration/state ownership, action
@@ -108,6 +119,6 @@ recommended next design task is [configuration schema and validation (#15)](http
 Read a task with `gh issue view <number> --repo rjtg/wudo --comments`.
 Reviewed architecture/security decisions remain in the repository documents.
 
-The [configuration proposal](docs/configuration-proposal.md) and
-[Paperless TOML example](examples/paperless.actions.toml) are drafts for review,
-not yet supported configuration.
+The [offline configuration contract](docs/configuration-proposal.md) and
+[Paperless TOML example](examples/paperless.actions.toml) describe schema v1.
+Privileged runtime behavior remains unimplemented.

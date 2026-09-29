@@ -6,3 +6,6 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+toml = { version = "0.8", default-features = false, features = ["parse"] }

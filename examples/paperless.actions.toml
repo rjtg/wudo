@@ -1,4 +1,4 @@
-# DRAFT action configuration for review; not yet supported by Wudo.
+# Offline schema v1 example; runtime operations are not yet implemented.
 # This is the action/resource document, not a complete daemon configuration.
 # Replace the illustrative LUKS UUID and unit name before deployment.
 schema_version = 1

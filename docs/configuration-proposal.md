@@ -1,6 +1,6 @@
 # Action configuration and offline validation proposal
 
-Status: **draft for review, not an implemented or approved schema**.
+Status: **offline schema version 1 implemented; privileged runtime behavior remains unimplemented**.
 Tracks [configuration #15](https://github.com/rjtg/wudo/issues/15) and
 [action semantics #16](https://github.com/rjtg/wudo/issues/16).
 
@@ -23,7 +23,11 @@ administrator. Parsing the example does not make it deployable.
 - Wudo unlocks storage and requests a fixed unit start. Administrator-configured
   systemd units handle mounting and application orchestration.
 
-Everything below specifies a proposed representation or behavior for review.
+The owner requested implementation of issue #3 after reviewing the example.
+The offline slice adopts the concrete bounds and strict variant rules below.
+This records implementation policy, not approval of unresolved runtime behavior.
+Authentication, secret transport, state lifecycle and execution remain separate
+review gates. No daemon dependencies were added by the offline implementation.
 
 ## Scope of this document
 
@@ -85,13 +89,17 @@ not authentication, user verification or authorization. A confirmation screen
 cannot prove user intent against malicious UI delivery. Exact ceremony rules
 remain in issue #12; the parser must not be mistaken for their implementation.
 
-## Proposed lexical rules and limits
+## Offline lexical rules and limits
 
-These are intentionally conservative initial limits, subject to review.
+These are conservative initial offline limits.
 Check the byte limit before parsing, including when input grows while reading.
-Bound parser nesting/resource consumption as well as resulting object counts.
+The TOML 1.0 parser (`toml` 0.8, parse feature only) retains its default
+recursion guard (80 in the locked `toml_edit` version), covering nested values
+and dotted keys. Do not enable its `unbounded` feature. Object counts are checked
+after parsing the size-bounded input. Dependencies must preserve these guards
+when updated.
 
-| Item | Proposed rule |
+| Item | Rule |
 | --- | --- |
 | Entire document | At most 256 KiB, UTF-8, TOML 1.0 syntax; no BOM |
 | Object counts | At most 128 actions, 32 resources, one managed secret per LUKS resource |
@@ -140,7 +148,7 @@ Do not read mutable state to determine whether a configuration parses.
 
 ## Offline CLI contract
 
-Proposed command:
+Implemented command:
 
 ```text
 wudo config validate --file examples/paperless.actions.toml
@@ -150,25 +158,34 @@ Require an explicit local file path for this initial command. It is an
 unprivileged read-only CLI input, not a remote request or permission to install
 configuration. No daemon contact, network request, command execution, LUKS
 probe, systemd query, state mutation or secret access. Read only a bounded
-regular file; detailed symlink/secure-open policy must be specified before the
-file reader is implemented. Offline validation does not require root ownership.
+regular file. On Linux the CLI uses `rustix` safe file-opening APIs with
+`NOFOLLOW`, `NONBLOCK`, `NOCTTY` and `CLOEXEC`, then checks metadata on the opened
+descriptor. Final-component symlinks and nonregular files are rejected; parent
+symlinks are allowed. This prevents a final-path check/open race and FIFO waits.
+Read at most the byte cap plus one, even if the file grows after metadata checks.
+No root ownership or mode policy is imposed by this unprivileged validator.
+It is not suitable as the future privileged daemon loader; parent trust,
+filesystem races and concurrent-writer snapshot guarantees require that design.
 
-Proposed success output:
+Success output:
 
 ```text
-Action configuration is structurally valid (3 actions, 1 resource, 1 managed secret).
+Action configuration is structurally valid (3 actions, 1 resources, 1 managed secrets).
 Deployment readiness was not checked.
 ```
 
-Proposed exit codes: `0` valid, `1` unreadable or invalid configuration, `2` CLI
+Exit codes: `0` valid, `1` unreadable or invalid configuration, `2` CLI
 usage error. Report one bounded diagnostic (at most 1 KiB) with a stable category
-and line/column when available. Do not echo raw source lines, supplied values,
+only. Line/column reporting is not implemented. Do not echo raw source lines, supplied values,
 unknown field names, paths, or unsanitized parser/library errors: a malformed
 input might accidentally contain a secret. Use known schema field names only.
 
 Example diagnostic categories: `unsupported-schema`, `unknown-field`,
 `invalid-value`, `missing-reference`, `conflicting-resource`, `input-too-large`,
-`invalid-toml`, and `input-unreadable`. Exact Rust error types remain to be designed.
+`invalid-toml`, `invalid-schema`, and `input-unreadable`. Syntax errors map to
+`invalid-toml`; missing fields and wrong types map to `invalid-schema`. No raw
+third-party error is retained in the public `ConfigError`. Unknown kinds are
+`invalid-value`; unknown field names are `unknown-field`.
 
 ## Runtime guarantees this validator cannot provide
 
@@ -190,7 +207,7 @@ application-health reporting remain runtime design work under issue #16.
 Stopping Paperless does not mean the SSD is locked. This proposal adds no
 lock/close operation or automatic rollback.
 
-## Acceptance tests for the subsequent implementation
+## Acceptance tests
 
 - Accept the example, empty object tables, root-only start/stop, unused
   resources, and multiple actions sharing a resource.
@@ -216,9 +233,11 @@ and authentication implementations, not this offline parser.
 
 ## Review choices
 
-The agreed ownership and conditional-secret model is preserved. Approval is
-still needed for this exact schema, lexical/numeric restrictions, resource-owned
-secret representation, confirmation field, CLI contract and diagnostics before coding.
+The agreed ownership and conditional-secret model is preserved. The offline
+implementation uses the schema, limits, resource-owned secret representation,
+confirmation field and CLI contract above. No authorization, confirmation UX,
+secret eligibility or runtime lifecycle decision follows from parsing these
+fields. Runtime decisions listed above remain open before privileged execution.
 
 Alternatives deferred: generic executable actions, recursive dependencies,
 free-form step lists, duplicated resource definitions per action, and permissions

@@ -10,3 +10,7 @@ workspace = true
 [[bin]]
 name = "wudo"
 path = "src/main.rs"
+
+[dependencies]
+rustix = { version = "1", default-features = false, features = ["fs", "std"] }
+wudo-core = { version = "0.1.0", path = "../wudo-core" }

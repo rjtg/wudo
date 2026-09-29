@@ -44,17 +44,18 @@ Define fallback behavior when PRF is unavailable.
 
 Tracking: [#15](https://github.com/rjtg/wudo/issues/15).
 
-A [draft schema and validation contract](configuration-proposal.md) with a
-[Paperless example](../examples/paperless.actions.toml) is ready for review;
-it is not yet an approved schema or implemented parser.
+The [offline schema and validation contract](configuration-proposal.md) and
+[Paperless example](../examples/paperless.actions.toml) are implemented in the
+first slice of #3. Runtime loading and execution remain unimplemented.
 
 Decided: root-owned configuration defines available actions, fixed targets,
 secret definitions, and limits. The daemon manages users, credentials and
 authorization grants, with grant/revoke/list operations through the local
 administrative CLI. Wrappers and provisioning state are daemon-managed.
 
-Still specify schema/versioning, IDs, bounds, reload semantics, persistence,
-revocation timing, and administrative IPC. Offline structural validation must
+Offline schema versioning, IDs and bounds are documented in the configuration
+contract. Still specify runtime reload semantics, persistence, revocation timing
+and administrative IPC. Offline structural validation must
 be distinguished from runtime readiness and privileged filesystem checks.
 
 ## 5. Action execution model
