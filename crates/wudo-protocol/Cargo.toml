@@ -1,0 +1,11 @@
+[package]
+name = "wudo-protocol"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+minicbor = { version = "2.3.0", default-features = false }

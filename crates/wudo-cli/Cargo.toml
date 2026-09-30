@@ -12,5 +12,7 @@ name = "wudo"
 path = "src/main.rs"
 
 [dependencies]
-rustix = { version = "1", default-features = false, features = ["fs", "std"] }
+rustix = { version = "1", default-features = false, features = ["fs", "net", "std"] }
+tokio = { version = "1", default-features = false, features = ["rt", "net", "io-util", "time"] }
 wudo-core = { version = "0.1.0", path = "../wudo-core" }
+wudo-protocol = { version = "0.1.0", path = "../wudo-protocol" }

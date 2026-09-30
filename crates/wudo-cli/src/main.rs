@@ -1,3 +1,5 @@
+mod status;
+
 use rustix::fs::{Mode, OFlags, open};
 use std::{env, fs::File, io::Read, path::Path, process::ExitCode};
 use wudo_core::config::{Config, MAX_INPUT_BYTES};
@@ -6,6 +8,22 @@ fn main() -> ExitCode {
     // Consume a fixed number of arguments rather than collecting arbitrary input.
     let mut args = env::args_os().skip(1);
     let command = args.next();
+    if command.as_deref() == Some(std::ffi::OsStr::new("status")) {
+        if args.next().is_some() {
+            eprintln!("Usage: wudo status");
+            return ExitCode::from(2);
+        }
+        return match status::run() {
+            Ok(()) => {
+                println!("Daemon IPC reachable (protocol 1); action readiness not checked.");
+                ExitCode::SUCCESS
+            }
+            Err(()) => {
+                eprintln!("Daemon status failed: connection-or-protocol-error.");
+                ExitCode::FAILURE
+            }
+        };
+    }
     let subcommand = args.next();
     let flag = args.next();
     let path = args.next();
@@ -15,7 +33,7 @@ fn main() -> ExitCode {
         || path.is_none()
         || args.next().is_some()
     {
-        eprintln!("Usage: wudo config validate --file PATH");
+        eprintln!("Usage: wudo status | wudo config validate --file PATH");
         return ExitCode::from(2);
     }
     match validate(Path::new(&path.expect("path checked above"))) {

@@ -19,6 +19,35 @@ Creates WebAuthn challenges and verifies registration/authentication responses u
 
 No HTTP parsing or network listener.
 
+#### Runtime decision
+
+Use Tokio for `wudod`, initially with a current-thread async runtime and only
+required features enabled. It coordinates Unix IPC, deadlines, process I/O and
+shutdown. This decision does not add HTTP or a web framework to the daemon.
+
+Keep parsing, policy and state-transition logic synchronous where practical.
+Bound admitted connections, tasks, queues and blocking work explicitly. Blocking
+work must not run on the async thread; a current-thread runtime can still use
+separate blocking threads, which require their own limits.
+
+The daemon owns operation lifetimes independently of client connections.
+Dropping a future or timing out a request does not undo an unlock, stop an
+already-running blocking call, or necessarily cancel a systemd job. Execution
+and cleanup semantics must be specified before privileged operations are added.
+
+Rationale: the planned combination of IPC, process monitoring and deadlines
+benefits from one established I/O runtime rather than custom thread/polling
+coordination. The cost is extra dependencies and explicit async cancellation
+reasoning. A synchronous bounded-worker design was considered; it remains
+simpler for a strictly serial service but fits the planned monitoring work less
+well. The web/UI framework suggestions are not finalized by this decision.
+
+IPC uses CBOR only, framed by a four-byte big-endian payload length, with an
+explicit protocol version in the payload. No encoding negotiation, JSON fallback
+or compression. Logs contain bounded event metadata rather than payload dumps.
+The implemented status-only slice and its reviewed decoder/access policy are
+described in the [IPC specification](ipc-proposal.md).
+
 ### `wudo-web`
 
 Unprivileged network service.

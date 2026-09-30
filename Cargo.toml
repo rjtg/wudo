@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/wudo-core",
+    "crates/wudo-protocol",
     "crates/wudod",
     "crates/wudo-web",
     "crates/wudo-cli",
