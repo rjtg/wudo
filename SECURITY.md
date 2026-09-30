@@ -102,6 +102,31 @@ Therefore Unix-socket possession alone must not implicitly mean "authorized for 
 
 Challenges must be short-lived, single-use, and bound to the intended operation. Detailed ceremony schemas, replay handling, and secret-operation binding remain open. Authenticated encryption between the UI and daemon protects secret transport; its exact protocol and endpoint key authentication remain to be specified.
 
+## One verification per action
+
+Each action invocation requires a fresh daemon-verified passkey assertion bound
+to that action. Its configured internal steps share that verification; later
+invocations require a new one. No reusable session authorizes subsequent actions.
+
+A malicious UI may display one action while obtaining a genuine challenge for
+another action the user is authorized to invoke. Daemon verification and action
+binding prevent unauthorized grants and substitution of the bound operation,
+but do not prove the displayed intent. This misleading-UI risk is accepted.
+Do not add daemon-signed challenges as a purported solution: malicious served
+code can ignore their verification or mislabel authentic challenges. UI
+attestation and a separate trusted confirmation display remain out of scope.
+Authenticated end-to-end secret transport remains independently required.
+
+## WebAuthn installation identity
+
+Accepted design: the installation administrator supplies one exact HTTPS origin
+and an RP ID matching its hostname in trusted daemon configuration. No deployment
+hostname is hardcoded. `wudod` verifies against these settings, never values
+selected by the browser, relay or Host/Forwarded headers. Scheme, hostname and
+effective port must match; wildcard/subdomain/any-port acceptance is excluded.
+Changing the RP ID can require passkey re-enrollment. Concrete configuration
+syntax and migration handling remain to be specified before implementation.
+
 ## Conditional secret use
 
 Authentication and action authorization apply even when storage is already
@@ -131,6 +156,21 @@ For the LUKS use case:
 - retain the existing human LUKS recovery passphrase;
 - use a separate random Wudo key in another keyslot;
 - permit local root to enroll replacement credentials.
+
+## Explicit insecure enrollment option
+
+Accepted design, not yet implemented: local root may start a short-lived,
+one-enrollment opportunity with `wudo enroll --insecure`. It activates the first
+valid WebAuthn registration for the root-selected user without independent
+credential identification or a second local approval. A compromised relay or
+another party reaching the opportunity can enroll first and gain that user's
+existing action permissions. This enrollment takeover risk is explicitly accepted
+only for this opt-in window; default enrollment requires local candidate approval.
+
+WebAuthn verification remains mandatory. The web client cannot select the target
+user, grant permissions, or open/extend the window. Expiry, cancellation, restart
+or successful activation closes it. Credential enrollment does not automatically
+provision secret wrappers. Exact wire/state mechanics remain under #12 review.
 
 ## Revocation semantics
 

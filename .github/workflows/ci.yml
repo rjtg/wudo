@@ -21,3 +21,19 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - name: Tests
         run: cargo test --workspace --all-features --locked
+
+  webauthn-experiment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install stable Rust tools
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - name: Install native verifier build dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+      - name: Check experiment formatting
+        run: cargo fmt --manifest-path experiments/webauthn/Cargo.toml --check
+      - name: Lint experiment
+        run: cargo clippy --manifest-path experiments/webauthn/Cargo.toml --all-targets --all-features --locked -- -D warnings
+      - name: Test synthetic WebAuthn ceremonies
+        run: cargo test --manifest-path experiments/webauthn/Cargo.toml --locked
