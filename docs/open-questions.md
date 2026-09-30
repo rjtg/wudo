@@ -8,7 +8,10 @@ Tracking: [#12](https://github.com/rjtg/wudo/issues/12).
 
 The [ceremony proposal](webauthn-proposal.md) now records candidate policies,
 enrollment risks, limits and tests. Its core policies are accepted;
-persistence ordering and concrete wire schemas remain implementation gates.
+the [message contract](webauthn-wire-proposal.md) and codec slice are accepted.
+The opt-in v2 codec implements fields, limits and endpoint rules. Persistence
+ordering, verifier adapter compatibility and bounded authenticator-data parsing
+remain gates before runtime handlers.
 
 Decided: `wudod` creates challenges, verifies actual WebAuthn registration/authentication responses, and checks user authorization. `wudo-web` relays messages; neither it nor the UI can assert trusted authentication or authorization.
 

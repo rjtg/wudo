@@ -222,9 +222,15 @@ Never acknowledge enrollment/metadata updates before required durable writes.
 
 ## Wire contract and secret-dependent actions
 
+The [v2 message contract](webauthn-wire-proposal.md) now proposes concrete
+operation/body schemas, limits, endpoint permissions and state transitions.
+It is a draft, not an extension enabled by the existing status-only daemon.
+It also proposes a precise credential-ID fingerprint and one-at-a-time
+registration admission, refining the earlier illustrative descriptions above.
+
+
 Do not change v1 status framing while this draft is under review. New operation
-names, strict field schemas, extensions and bounds need a separate concrete
-wire table before coding. A candidate overall cap is 64 KiB with tighter limits
+names, strict field schemas, extensions and bounds are detailed in that draft and require review before coding. A candidate overall cap is 64 KiB with tighter limits
 for each raw field; fixture measurements must justify final numbers. Do not
 silently enlarge the current 4 KiB cap or accept an arbitrary JSON object.
 

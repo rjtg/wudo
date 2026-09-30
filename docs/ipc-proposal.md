@@ -5,6 +5,9 @@ Tracking: [#4](https://github.com/rjtg/wudo/issues/4).
 The endpoint policy, schema, limits, dependencies and lifecycle below were
 explicitly approved before implementation. The historical filename is retained.
 
+The accepted [v2 WebAuthn message contract](webauthn-wire-proposal.md) specifies future
+extensions. It does not change the implemented v1 contract documented here.
+
 ## First slice
 
 Implement only `wudo status` and a daemon `status` response. The response proves

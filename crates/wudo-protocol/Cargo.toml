@@ -9,3 +9,10 @@ workspace = true
 
 [dependencies]
 minicbor = { version = "2.3.0", default-features = false }
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+
+[features]
+default = []
+# Codec only; runtime crates do not enable this yet.
+v2 = ["dep:serde", "dep:serde_json"]

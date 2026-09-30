@@ -1,4 +1,7 @@
-//! Bounded status-only IPC. No I/O, heap decoding, or privileged behavior.
+//! Bounded IPC codecs without I/O or privileged behavior.
+//! The default v1 status codec performs no heap decoding; v2 is opt-in.
+#[cfg(feature = "v2")]
+pub mod v2;
 use minicbor::{Decoder, Encoder, encode::write::Cursor};
 
 pub const MAX_PAYLOAD: usize = 4096;
