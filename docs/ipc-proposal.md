@@ -1,6 +1,6 @@
 # Minimal Unix IPC specification
 
-Status: **approved; status-only implementation available locally**.
+Status: **approved; status-only implementation published and CI verified**.
 Tracking: [#4](https://github.com/rjtg/wudo/issues/4).
 The endpoint policy, schema, limits, dependencies and lifecycle below were
 explicitly approved before implementation. The historical filename is retained.
@@ -298,9 +298,29 @@ must recreate the directory after reboot (service packaging is deferred).
 Tests use current-user socket fixtures and injected expected peer identities.
 They exercise kernel peer credentials, strict parsing, separate admission
 limits, deadlines, client verification, shutdown and filesystem cleanup.
-Root-only deployment, cross-account connections and real signal delivery have
-not been exercised by these unprivileged tests. ACL error classification is
-unit-tested; deployment ACL support remains environment-dependent.
+The separate privileged smoke test passed in a maintainer-supplied transcript:
+root startup, cross-account access policy, socket permissions, duplicate startup,
+and SIGTERM/SIGINT cleanup with an incomplete connection. ACL error
+classification is unit-tested; filesystem compatibility remains environment-dependent.
 
 There is no per-request audit implementation yet. Status does not load action
 configuration or establish WebAuthn readiness. The web service remains a stub.
+
+### Isolated privileged smoke test
+
+After `cargo build --workspace --locked`, run:
+
+```text
+python3 scripts/ipc-smoke.py
+```
+
+The script prompts through sudo and requires Linux `unshare`, `mount`, Python 3,
+and mount-namespace privileges. It mounts a temporary `/run` inside a private
+mount namespace, runs the production binaries, and uses child processes with
+numeric UIDs/GIDs (no persistent accounts). It checks root CLI access, allowed
+web access, rejection of another UID in the web group, rejection of root on the
+web endpoint, socket modes, duplicate startup, SIGTERM/SIGINT, and cleanup with
+an incomplete connection. The host's `/run` is not changed. Run only trusted
+local builds because this test executes them as root. The maintainer ran this harness successfully with sudo and supplied the full
+passing transcript. This validates the tested Linux environment; it does not
+establish compatibility with every deployment filesystem.
