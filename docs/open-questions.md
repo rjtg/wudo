@@ -7,7 +7,7 @@ These items must not be silently guessed by an implementation agent.
 Tracking: [#12](https://github.com/rjtg/wudo/issues/12).
 
 The [ceremony proposal](webauthn-proposal.md) now records candidate policies,
-enrollment risks, limits and tests. It is a draft; trusted enrollment UX,
+enrollment risks, limits and tests. Its core policies are accepted;
 persistence ordering and concrete wire schemas remain implementation gates.
 
 Decided: `wudod` creates challenges, verifies actual WebAuthn registration/authentication responses, and checks user authorization. `wudo-web` relays messages; neither it nor the UI can assert trusted authentication or authorization.
@@ -23,10 +23,17 @@ internal steps; no reusable action-authorizing session. A malicious UI can
 misrepresent the action, which is an accepted risk. No daemon-signed challenge
 or UI attestation is added to try to prove displayed intent.
 
+Decided: webauthn-rs with its evaluated dependency footprint; required user
+verification; synchronized passkeys allowed without vendor attestation; two-minute
+ceremonies and ten-minute enrollment windows without browser renewal; failed
+verification consumes the challenge and restart clears pending state. Default
+candidate approval is a manual safeguard with accepted residual malicious-UI
+substitution risk; an independent identity check is not a product prerequisite.
+
 Still specify:
-- established verifier library and bounded input schemas;
+- bounded input schemas and remaining verifier compatibility tests;
 - origin/RP configuration schema and migration handling;
-- required user-verification properties;
+- concrete configuration and ceremony validation rules;
 - operation/action and principal binding;
 - expiry, single-use challenge consumption, and concurrency/replay handling;
 - enrollment and recovery binding to local administrative authority;

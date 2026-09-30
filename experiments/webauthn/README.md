@@ -50,14 +50,14 @@ not a proposed installation hostname.
   OpenSSL/openssl-sys, Serde JSON/CBOR, ASN.1 and X.509 parsers, URL/IDNA handling
   and tracing. Disabling the high-level attestation feature does not eliminate
   those core dependencies. The experiment enables no dangerous verifier
-  features. Review this cost before approving a daemon dependency.
+  features. This evaluated cost has been accepted for daemon integration.
 - Source inspection of 0.5.5's extension types found HMAC-secret fields but no
   WebAuthn `prf` fields. This harness does not establish PRF compatibility;
   browser-side PRF integration needs a separate design/test under #14. Never
   forward plaintext PRF output merely because a library type has secret fields.
 
-These results support continuing the library evaluation, not treating #12 as
-finished or the library as approved for privileged integration.
+The verifier choice and evaluated dependency footprint are now approved for
+daemon integration. These results do not finish #12 or validate untested policies.
 
 ## Remaining gates
 
@@ -67,7 +67,7 @@ userHandle handling, supported algorithm coverage, parsing bounds/extension
 allowlists, logging redaction and error mapping need further validation.
 Registration here tests one software authenticator, not attestation diversity.
 
-Before runtime integration, review the dependency graph and exact input schemas,
+Before runtime integration, review exact input schemas and any dependency changes,
 choose persistent state/durability rules, implement bounded single-use operation
 state, and finalize default/insecure enrollment semantics. API success is not
 authorization and does not establish the intent shown by an untrusted UI.

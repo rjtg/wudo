@@ -102,6 +102,19 @@ Therefore Unix-socket possession alone must not implicitly mean "authorized for 
 
 Challenges must be short-lived, single-use, and bound to the intended operation. Detailed ceremony schemas, replay handling, and secret-operation binding remain open. Authenticated encryption between the UI and daemon protects secret transport; its exact protocol and endpoint key authentication remain to be specified.
 
+## WebAuthn verification and lifetime policy
+
+Use webauthn-rs high-level passkey APIs; its evaluated OpenSSL/parser dependency
+footprint is accepted. Require user presence and verification for registration
+and authentication. Synchronized passkeys are allowed; manufacturer/hardware
+attestation is not required. Real-device and PRF compatibility still need tests.
+
+Ceremonies expire after two minutes. Local enrollment opportunities, including
+approval, expire after ten minutes; a ceremony cannot outlive its opportunity.
+Browser activity cannot extend these deadlines. Consume each challenge before
+verification, including failed attempts; retries need fresh challenges. Restart
+invalidates pending ceremonies, enrollment opportunities and inactive candidates.
+
 ## One verification per action
 
 Each action invocation requires a fresh daemon-verified passkey assertion bound
@@ -165,7 +178,12 @@ valid WebAuthn registration for the root-selected user without independent
 credential identification or a second local approval. A compromised relay or
 another party reaching the opportunity can enroll first and gain that user's
 existing action permissions. This enrollment takeover risk is explicitly accepted
-only for this opt-in window; default enrollment requires local candidate approval.
+for automatic activation only in this opt-in window. Default enrollment requires
+local candidate approval, but that is a manual safeguard, not proof of human
+ownership: a malicious UI can still substitute a credential and mislead root
+into approving it. This residual risk is accepted in default mode too. An
+independent trusted check is optional additional assurance; comparing values
+provided by the same compromised UI does not establish that assurance.
 
 WebAuthn verification remains mandatory. The web client cannot select the target
 user, grant permissions, or open/extend the window. Expiry, cancellation, restart

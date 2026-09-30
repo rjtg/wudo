@@ -1,12 +1,14 @@
 # Daemon-side WebAuthn ceremonies
 
-Status: **draft for review, not approved for implementation**.
+Status: **core policies accepted; wire and persistence details remain draft**.
 Tracking: [#12](https://github.com/rjtg/wudo/issues/12).
-This extends the reviewed status-only IPC design; it does not add operations or
-dependencies. The explicit `enroll --insecure` opt-in is an accepted design
-decision, as are the installation-configured origin/RP rule and one fresh
-verification per action. Other policy
-choices remain proposals unless recorded in SECURITY.md. Secret transport remains #13 and device/PRF feasibility #14.
+Accepted: webauthn-rs and its reviewed dependency footprint, required user
+verification, synchronized passkeys, installation-configured origin/RP policy,
+one verification per action, fixed ceremony/enrollment expiry, consumption on
+failed verification, and the default/insecure enrollment distinction below.
+This document does not itself add runtime operations. Concrete schemas,
+persistence and concurrency details still need a reviewable implementation
+contract. Secret transport remains #13 and device/PRF feasibility #14.
 
 ## Verifier and origin policy
 
@@ -14,7 +16,7 @@ An [isolated verifier experiment](../experiments/webauthn/README.md) now exercis
 synthetic registration/authentication and rejection cases. Its findings inform
 this draft; no verifier dependency or operation has been added to the daemon.
 
-Propose `webauthn-rs` using its high-level passkey registration/authentication
+Accepted: use `webauthn-rs` with its high-level passkey registration/authentication
 APIs inside `wudod`. The inspected documentation is version 0.5.5. Its API
 provides paired challenge and server-state objects; keep that state exclusively
 in the daemon. Do not serialize it into browser cookies or trust state supplied
@@ -23,11 +25,13 @@ a credential ID already belonging to any account, not merely duplicates within
 the selected account. Update stored authentication metadata after verification.
 See the [library API](https://docs.rs/webauthn-rs/0.5.5/webauthn_rs/struct.Webauthn.html).
 
-Before adding the dependency, inspect locked features, cryptographic backend,
-transitive dependencies, Linux ARM support, supported algorithms, and extension
-handling. No handwritten signature, attestation or authenticator-data parser.
+The 0.5.5 experiment's OpenSSL and parser dependency footprint is accepted for
+daemon integration. Keep defaults disabled and retain only required features.
+Linux ARM support, algorithm coverage and extension handling still need tests;
+this approval does not mean those environments have been validated. No handwritten signature, attestation or authenticator-data parser.
 Do not enable relaxed verification or dangerous state-serialization features.
-An API suitability spike must verify the proposal against the selected version.
+The existing API experiment is evidence for the selected version, not proof of
+all production policies.
 
 Accepted installation policy: the administrator configures one HTTPS origin
 and an RP ID equal to that origin's hostname. Wudo hardcodes no installation
@@ -47,7 +51,7 @@ The [builder API](https://docs.rs/webauthn-rs/0.5.5/webauthn_rs/struct.WebauthnB
 exposes origin and port policy controls. Verify their exact defaults and tests
 rather than assuming URL validation alone enforces this deployment policy.
 
-Require both user presence and user verification for registration and every
+Accepted: require both user presence and user verification for registration and every
 action assertion. Accept ordinary passkeys without manufacturer attestation;
 do not require hardware-only credentials or forbid synchronized credentials.
 Request no attestation identifying a device model as an authorization condition.
@@ -137,8 +141,8 @@ root fixes its target user and expiry. Atomically activate at most one verified
 candidate and close the opportunity. Expiry, local cancellation and restart close
 it too. Concurrent verification must recheck the opportunity at commit; losing
 candidates cannot activate. Invalid attempts never activate a key or extend the
-window; resource limits still apply. Exact TTL, retry and discovery schemas are
-not finalized by approval of the convenience flag.
+window; resource limits still apply. The enrollment TTL is ten minutes, with
+no renewal by browser activity. Retry and discovery schemas remain to be detailed.
 
 ### Default enrollment
 
@@ -149,7 +153,7 @@ actions, or become an administrator. New users start without action grants.
 Adding a credential to an existing user gives access to that user's existing
 grants after activation; root must see that consequence before approval.
 
-Propose two local steps: initiate, then approve a verified pending credential.
+Accepted default: initiate locally, then approve a verified pending credential.
 The browser exchanges its ticket for one registration ceremony. Registration
 verification creates an inactive candidate; root approves that exact candidate
 ID and public-key fingerprint via the admin socket before it becomes usable.
@@ -158,15 +162,20 @@ public-key representation, not from a browser-chosen display label. Ticket and
 pending candidate expire on a daemon-enforced deadline. Consumption, global
 credential-ID uniqueness and activation must be transactional.
 
-Important limitation: the relay sees enrollment tickets and can race or replace
+Accepted limitation: the relay sees enrollment tickets and can race or replace
 the browser registration. Local approval prevents automatic activation but does
-not prove that a displayed candidate belongs to the intended person. Root must
-approve only an independently verified enrollment, for example one performed
-through a trusted local enrollment client/channel. Comparing two values both
-delivered by the compromised UI is not independent verification. The precise
-trusted enrollment UX/channel is a review blocker, not solved by a fingerprint.
-The insecure option explicitly accepts that race; it must never be described
-as relay-compromise-resistant enrollment.
+not prove that a displayed candidate belongs to the intended person. A root
+administrator can be misled into approving an attacker-controlled credential.
+This residual substitution risk is accepted for default enrollment as well.
+Comparing two fingerprints both delivered by a compromised UI is not independent
+verification; an independent trusted check can provide additional assurance but
+is not required for the initial product. Do not add device attestation or a
+separate trusted enrollment client as a prerequisite for this slice.
+
+Default approval is a manual safeguard; `--insecure` skips that safeguard.
+Neither mode claims protection against a malicious enrollment UI without an
+independent trusted check. The CLI must describe candidate identity and existing
+user permissions without claiming the candidate's human owner was verified.
 
 Recovery uses the same locally authorized process. It does not grant the new
 credential access to downstream key wrappers automatically. Lost passkeys must
@@ -175,7 +184,15 @@ remote grant management are deferred.
 
 ## Lifetime, concurrency and persistence
 
-Proposed starting limits, subject to review and target-device measurement:
+Accepted lifetime policy: ceremonies expire after 120 seconds and local
+enrollment opportunities after ten minutes from initiation, including approval.
+A ceremony cannot outlive its enclosing enrollment opportunity. Browser activity
+never extends either deadline. Failed verification consumes the challenge; retry
+requires a fresh challenge. Daemon restart invalidates pending ceremonies,
+enrollment opportunities and inactive candidates.
+
+The first two limits below are accepted; remaining capacity limits are proposed,
+subject to target-device measurement:
 
 | Resource | Bound |
 | --- | --- |
@@ -238,8 +255,8 @@ once execution after an ambiguous disconnect.
   persistence failure prevents activation or action admission.
 - Registration ID already assigned to another user; ticket reuse/expiry/race;
   inactive candidate cannot authenticate; wrong root approval cannot activate it.
-- Default enrollment: a substituted key cannot activate automatically; verify
-  the chosen trusted enrollment procedure catches substitution.
+- Default enrollment: candidates cannot activate without explicit local
+  approval bound to that candidate; no claim that this proves human ownership.
 - Insecure enrollment: only root can open the window or select its target;
   absent/expired/cancelled windows reject registration; invalid WebAuthn fails;
   concurrent valid candidates yield exactly one activation; the window never
@@ -251,12 +268,11 @@ once execution after an ambiguous disconnect.
 
 ## Review and implementation sequence
 
-Origin/RP installation policy, one verification per action and the insecure
-enrollment opt-in are accepted. Next review detailed UV policy and default
-enrollment authority.
-Then resolve trusted enrollment UX, persistent state/revocation ordering and
-the exact bounded wire schemas. Validate library behavior and dependencies in
-an isolated test harness. Only after explicit review add daemon operations.
+The policy decisions listed at the top are accepted. Prepare the concrete
+bounded message schemas, pending-state transitions, persistence/revocation
+ordering and negative tests next. Review new daemon operations and privileged
+filesystem behavior as concrete contracts; do not reopen the already approved
+verifier choice, lifetime policy or accepted malicious-UI risk unnecessarily.
 
 Rejected directions: relay-issued authentication grants, client-held verifier
 state, first-browser administration, hardware attestation as a default, and
