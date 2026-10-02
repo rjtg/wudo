@@ -14,9 +14,9 @@ schema validation, transactional user creation and lookup, with restart tests.
 The earlier snapshot protocol and configuration-wide grant invalidation proposal
 are not adopted by this change. Grant semantics remain a separate review.
 
-`wudo-store` is an isolated synchronous workspace crate. No daemon dependency,
-IPC handler, administrative CLI command or worker thread is enabled yet. Later,
-a dedicated bounded worker should own the connection off Tokio's I/O thread.
+`wudo-store` is a synchronous workspace crate. The approved
+[administration slice](user-administration-proposal.md) integrates it through
+a dedicated bounded worker off Tokio's I/O thread.
 The synchronous API can move to that worker without exposing SQL to clients.
 
 Bundled SQLite gives a reproducible native build without requiring a system
@@ -85,16 +85,18 @@ with mode 0600; SQLite opens without CREATE or URI flags, with NOFOLLOW.
 
 This is not the production root path resolver. Ancestor trust, descriptor-based
 path resolution and protection against directory replacement are prerequisites
-owned by the future daemon integration. Callers must not pass remote-selected
+owned by the daemon integration described in the administration contract. Callers must not pass remote-selected
 paths or share this directory with other writers. Tests use private temporary
 directories as an ordinary user. No environment variable relaxes a root policy:
-no production policy has been wired in yet. The eventual daemon must require
-root ownership and validate the complete path before invoking this API.
+the daemon enforces root ownership and validates the complete path before
+invoking this API.
 
 ## Remaining slices
 
-- Production directory setup/validation and bounded Tokio worker integration.
-- Reviewed administrative initialize/create/inspect CLI and IPC operations.
+The [local user administration contract](user-administration-proposal.md)
+implements initialize/upgrade/create/show, root-only dispatch, production path
+checks and a bounded worker lifecycle.
+
 - Established verifier credential serialization and its size/compatibility tests.
 - Credential activation/revocation, grant binding, RP/origin binding, migrations
   and local recovery policy. No earlier proposal for these is implicitly accepted.

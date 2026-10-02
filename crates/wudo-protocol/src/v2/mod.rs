@@ -160,6 +160,9 @@ fn checked(bytes: &[u8]) -> Result<Fields<'_>> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Operation {
     Status,
+    StoreInitialize,
+    StoreUpgrade,
+    UserInspect,
     UserCreate,
     EnrollmentOpen,
     EnrollmentInspect,
@@ -175,7 +178,10 @@ impl Operation {
     pub fn allowed(self, endpoint: Endpoint) -> bool {
         match self {
             Self::Status => true,
-            Self::UserCreate
+            Self::StoreInitialize
+            | Self::StoreUpgrade
+            | Self::UserInspect
+            | Self::UserCreate
             | Self::EnrollmentOpen
             | Self::EnrollmentInspect
             | Self::EnrollmentCancel
@@ -201,6 +207,9 @@ impl Operation {
     fn name(self) -> &'static str {
         match self {
             Self::Status => "status",
+            Self::StoreInitialize => "store.initialize",
+            Self::StoreUpgrade => "store.upgrade",
+            Self::UserInspect => "user.inspect",
             Self::UserCreate => "user.create",
             Self::EnrollmentOpen => "enrollment.open",
             Self::EnrollmentInspect => "enrollment.inspect",
@@ -216,6 +225,9 @@ impl Operation {
     fn parse(s: &str) -> Result<Self> {
         [
             Self::Status,
+            Self::StoreInitialize,
+            Self::StoreUpgrade,
+            Self::UserInspect,
             Self::UserCreate,
             Self::EnrollmentOpen,
             Self::EnrollmentInspect,
@@ -238,6 +250,9 @@ impl Operation {
 #[derive(Clone, PartialEq, Eq)]
 pub enum Request<'a> {
     Status,
+    StoreInitialize,
+    StoreUpgrade,
+    UserInspect(UserInspect<'a>),
     UserCreate(UserCreate<'a>),
     EnrollmentOpen(EnrollmentOpen),
     EnrollmentInspect(EnrollmentRef),
@@ -253,6 +268,9 @@ impl Request<'_> {
     pub fn operation(&self) -> Operation {
         match self {
             Self::Status => Operation::Status,
+            Self::StoreInitialize => Operation::StoreInitialize,
+            Self::StoreUpgrade => Operation::StoreUpgrade,
+            Self::UserInspect(_) => Operation::UserInspect,
             Self::UserCreate(_) => Operation::UserCreate,
             Self::EnrollmentOpen(_) => Operation::EnrollmentOpen,
             Self::EnrollmentInspect(_) => Operation::EnrollmentInspect,
@@ -291,6 +309,15 @@ pub fn decode_request(bytes: &[u8], endpoint: Endpoint) -> Result<Request<'_>> {
             Fields::read(body)?.finish()?;
             Request::Status
         }
+        Operation::StoreInitialize | Operation::StoreUpgrade => {
+            Fields::read(body)?.finish()?;
+            if op == Operation::StoreInitialize {
+                Request::StoreInitialize
+            } else {
+                Request::StoreUpgrade
+            }
+        }
+        Operation::UserInspect => Request::UserInspect(UserInspect::read(body)?),
         Operation::UserCreate => Request::UserCreate(UserCreate::read(body)?),
         Operation::EnrollmentOpen => Request::EnrollmentOpen(EnrollmentOpen::read(body)?),
         Operation::EnrollmentInspect => Request::EnrollmentInspect(EnrollmentRef::read(body)?),
@@ -329,9 +356,13 @@ pub fn encode_request(out: &mut [u8], request: &Request<'_>, endpoint: Endpoint)
         .str(op.name())?
         .str("body")?;
     match request {
-        Request::Status | Request::RegistrationBeginInsecure => {
+        Request::Status
+        | Request::StoreInitialize
+        | Request::StoreUpgrade
+        | Request::RegistrationBeginInsecure => {
             e.map(0)?;
         }
+        Request::UserInspect(v) => v.write(&mut e)?,
         Request::UserCreate(v) => v.write(&mut e)?,
         Request::EnrollmentOpen(v) => v.write(&mut e)?,
         Request::EnrollmentInspect(v) | Request::EnrollmentCancel(v) => v.write(&mut e)?,
@@ -349,6 +380,8 @@ pub fn encode_request(out: &mut [u8], request: &Request<'_>, endpoint: Endpoint)
 #[derive(Clone, PartialEq, Eq)]
 pub enum Response<'a> {
     Status(StatusResult),
+    StoreReady(StoreReady),
+    UserInfo(UserInfo<'a>),
     UserCreated(UserCreated),
     Opened(Opened),
     OpenInspection(OpenInspection),
@@ -422,6 +455,10 @@ pub fn decode_response<'a>(
     envelope.finish()?;
     let response = match request {
         Request::Status => Response::Status(StatusResult::read(body)?),
+        Request::StoreInitialize | Request::StoreUpgrade => {
+            Response::StoreReady(StoreReady::read(body)?)
+        }
+        Request::UserInspect(_) => Response::UserInfo(UserInfo::read(body)?),
         Request::UserCreate(_) => Response::UserCreated(UserCreated::read(body)?),
         Request::EnrollmentOpen(request) => {
             let value = Opened::read(body)?;
@@ -488,6 +525,8 @@ pub fn encode_response(
         e.str("ok")?.str("body")?;
         match response {
             Response::Status(v) => v.write(&mut e)?,
+            Response::StoreReady(v) => v.write(&mut e)?,
+            Response::UserInfo(v) => v.write(&mut e)?,
             Response::UserCreated(v) => v.write(&mut e)?,
             Response::Opened(v) => v.write(&mut e)?,
             Response::OpenInspection(v) => v.write(&mut e)?,
@@ -504,4 +543,13 @@ pub fn encode_response(
     let n = e.into_writer().position();
     decode_response(&out[..n], request, endpoint)?;
     Ok(n)
+}
+
+/// Inspect only a bounded, structurally valid envelope; callers still decode the selected version.
+pub fn envelope_version(bytes: &[u8]) -> Result<u64> {
+    if bytes.is_empty() || bytes.len() > MAX_PAYLOAD {
+        return Err(Error::InvalidRequest);
+    }
+    bounded::outer(bytes)?;
+    Fields::read(bytes)?.take("version")
 }

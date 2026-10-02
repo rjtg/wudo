@@ -9,6 +9,7 @@ workspace = true
 
 [dependencies]
 rusqlite = { version = "0.40", default-features = false, features = ["bundled", "limits"] }
+rusqlite_migration = { version = "2.6", default-features = false }
 getrandom = "0.4"
 rustix = { version = "1", default-features = false, features = ["process", "std"] }
 

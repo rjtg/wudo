@@ -29,7 +29,9 @@ v2 response: {"version":2,"result":"ok","body":{"status":"ready"}}
 
 Supporting v1 preserves the existing client contract. Do not replace v1 in place
 with the new envelope. The opt-in `wudo-protocol/v2` codec implements the v2
-schemas. Runtime handlers and transport dispatch remain v1 only.
+schemas. Runtime supports v1 status plus v2 status and the approved
+[local administration operations](user-administration-proposal.md). WebAuthn
+and action handlers remain disabled.
 No JSON fallback, encoding selector,
 compression or automatic downgrade of a failed v2 operation to v1.
 

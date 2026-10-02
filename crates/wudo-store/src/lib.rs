@@ -12,6 +12,12 @@ use std::{
 
 pub const MAX_USERS: usize = 64;
 const APP_ID: i64 = 0x5755444f;
+pub const SCHEMA_VERSION: usize = 1;
+fn migrations() -> rusqlite_migration::Migrations<'static> {
+    rusqlite_migration::Migrations::new(vec![rusqlite_migration::M::up(include_str!(
+        "../migrations/001_users.sql"
+    ))])
+}
 const MAX_DB: u64 = 4 * 1024 * 1024;
 const SCHEMA: &str = "CREATE TABLE users (id BLOB PRIMARY KEY NOT NULL CHECK(length(id)=16), name TEXT NOT NULL UNIQUE CHECK(length(CAST(name AS BLOB)) BETWEEN 1 AND 64), label TEXT NOT NULL CHECK(length(CAST(label AS BLOB)) BETWEEN 1 AND 128)) STRICT";
 
@@ -22,6 +28,7 @@ pub enum Error {
     Conflict,
     Capacity,
     UnsupportedSchema,
+    UpgradeRequired,
     InvalidStore,
     Unavailable,
 }
@@ -133,11 +140,9 @@ impl Store {
                 }
             })?;
         let mut connection = Self::connect(dir)?;
-        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        tx.execute_batch(SCHEMA)?;
-        tx.pragma_update(None, "application_id", APP_ID)?;
-        tx.pragma_update(None, "user_version", 1)?;
-        tx.commit()?;
+        migrations()
+            .to_latest(&mut connection)
+            .map_err(|_| Error::Unavailable)?;
         file.sync_all()?;
         fs::File::open(dir)?.sync_all()?;
         Ok(Self {
@@ -148,11 +153,47 @@ impl Store {
 
     /// Open an existing store; missing, empty and incompatible databases fail.
     pub fn open(dir: &Path) -> Result<Self> {
+        let store = Self::open_for_upgrade(dir)?;
+        if store.needs_upgrade()? {
+            return Err(Error::UpgradeRequired);
+        }
+        Ok(store)
+    }
+
+    /// Validate a recognized historical layout without migrating it.
+    pub fn open_for_upgrade(dir: &Path) -> Result<Self> {
         let connection = Self::connect(dir)?;
         let store = Self {
             connection,
             healthy: true,
         };
+        store.validate()?;
+        Ok(store)
+    }
+
+    pub fn needs_upgrade(&self) -> Result<bool> {
+        let version: i64 = self
+            .connection
+            .query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        Ok(version < SCHEMA_VERSION as i64)
+    }
+
+    /// Inspect a recognized schema without upgrading it. Unsupported older versions
+    /// must gain explicit validation here when a real migration is introduced.
+    pub fn schema_version(dir: &Path) -> Result<usize> {
+        let store = Self::open_for_upgrade(dir)?;
+        let version: i64 = store
+            .connection
+            .query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        usize::try_from(version).map_err(|_| Error::UnsupportedSchema)
+    }
+
+    /// Explicit upgrade only, never initialization or downgrade.
+    pub fn upgrade(dir: &Path) -> Result<Self> {
+        let mut store = Self::open_for_upgrade(dir)?;
+        migrations()
+            .to_latest(&mut store.connection)
+            .map_err(|_| Error::Unavailable)?;
         store.validate()?;
         Ok(store)
     }
@@ -242,7 +283,7 @@ impl Store {
     }
 
     pub fn create_user(&mut self, name: &str, label: &str) -> Result<User> {
-        if !self.healthy {
+        if !self.healthy || self.needs_upgrade()? {
             return Err(Error::Unavailable);
         }
         if !valid_name(name) || !valid_label(label) {
@@ -289,7 +330,7 @@ impl Store {
     }
 
     pub fn user_by_id(&self, id: UserId) -> Result<Option<User>> {
-        if !self.healthy {
+        if !self.healthy || self.needs_upgrade()? {
             return Err(Error::Unavailable);
         }
         self.connection
@@ -302,7 +343,7 @@ impl Store {
             .transpose()
     }
     pub fn user_by_name(&self, name: &str) -> Result<Option<User>> {
-        if !self.healthy {
+        if !self.healthy || self.needs_upgrade()? {
             return Err(Error::Unavailable);
         }
         if !valid_name(name) {
@@ -329,4 +370,51 @@ fn decode(row: &rusqlite::Row<'_>) -> Result<User> {
         return Err(Error::InvalidStore);
     }
     Ok(User { id, name, label })
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::*;
+    #[test]
+    fn embedded_schema_matches_v1_and_failed_upgrade_rolls_back() {
+        use rusqlite_migration::{M, Migrations};
+        migrations().validate().unwrap();
+        let mut c = Connection::open_in_memory().unwrap();
+        migrations().to_latest(&mut c).unwrap();
+        let sql: String = c
+            .query_row(
+                "SELECT sql FROM sqlite_schema WHERE name='users'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(sql, SCHEMA);
+        c.execute(
+            "INSERT INTO users VALUES (?1,'alice','Alice')",
+            [[0u8; 16].as_slice()],
+        )
+        .unwrap();
+        // Synthetic v2 exercises the runner without inventing a production schema.
+        let failing = Migrations::new(vec![
+            M::up(include_str!("../migrations/001_users.sql")),
+            M::up("ALTER TABLE users ADD COLUMN extra TEXT; INSERT INTO missing VALUES(1);"),
+        ]);
+        assert!(failing.to_latest(&mut c).is_err());
+        let v: i64 = c
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, 1);
+        let sql: String = c
+            .query_row(
+                "SELECT sql FROM sqlite_schema WHERE name='users'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(sql, SCHEMA);
+        let n: i64 = c
+            .query_row("SELECT count(*) FROM users", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1);
+    }
 }

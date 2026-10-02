@@ -2,7 +2,7 @@
 """Linux deployment smoke test; run after cargo build --workspace --locked.
 
 Usage: python3 scripts/ipc-smoke.py
-Prompts through sudo, then uses a private mount namespace and temporary /run.
+Prompts through sudo, then uses a private mount namespace and temporary /run and /var/lib.
 No accounts are created. Numeric test identities exist only in child processes.
 """
 import os
@@ -71,6 +71,10 @@ def isolated(original_namespace):
           "private mount namespace")
     subprocess.run(["mount", "--make-rprivate", "/"], check=True)
     subprocess.run(["mount", "-t", "tmpfs", "-o", "mode=0755", "tmpfs", "/run"], check=True)
+    subprocess.run(["mount", "-t", "tmpfs", "-o", "mode=0755", "tmpfs", "/var/lib"], check=True)
+    state_directory = Path("/var/lib/wudo")
+    state_directory.mkdir(mode=0o700)
+    state_directory.chmod(0o700)
     directory = Path("/run/wudo")
     directory.mkdir(mode=0o755)
     directory.chmod(0o755)
@@ -92,6 +96,12 @@ def isolated(original_namespace):
             result = subprocess.run([str(CLI), "status"], capture_output=True, text=True, timeout=6)
             check(result.returncode == 0 and "Daemon IPC reachable" in result.stdout,
                   "production CLI verifies root daemon")
+            if stop_signal == signal.SIGTERM:
+                for args in [("init",), ("user", "create", "alice", "--label", "Alice"), ("upgrade",)]:
+                    result = subprocess.run([str(CLI), *args], capture_output=True, text=True, timeout=6)
+                    check(result.returncode == 0, "administrative CLI " + args[0])
+            result = subprocess.run([str(CLI), "user", "show", "alice"], capture_output=True, text=True, timeout=6)
+            check(result.returncode == 0 and "Alice" in result.stdout, "persistent user inspection")
             probe("/run/wudo/admin.sock", 0, 0, True)
             probe("/run/wudo/admin.sock", 61001, 61001, False)
             probe("/run/wudo/web.sock", 61001, 61001, True)
@@ -114,7 +124,7 @@ def isolated(original_namespace):
             if process.poll() is None:
                 process.kill()
                 process.wait(timeout=3)
-    print("Deployment smoke test passed. Host /run was not modified.")
+    print("Deployment smoke test passed. Host /run and /var/lib were not modified.")
 
 
 if __name__ == "__main__":

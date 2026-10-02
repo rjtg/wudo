@@ -6,35 +6,120 @@ use tokio::{
     task::JoinSet,
     time::{Instant, timeout_at},
 };
-use wudo_protocol::{MAX_PAYLOAD, Response, decode_request, encode_response, payload_len};
+use wudo_protocol::{MAX_PAYLOAD, Response, decode_request, encode_response};
 
 pub(crate) fn authorized(actual_uid: u32, allowed_uid: u32) -> bool {
     actual_uid == allowed_uid
 }
 
-async fn exchange(mut stream: UnixStream) -> Result<(), ()> {
+#[cfg(test)]
+async fn exchange(stream: UnixStream) -> Result<(), ()> {
+    exchange_with_store(
+        stream,
+        wudo_protocol::v2::Endpoint::Admin,
+        None,
+        Instant::now() + Duration::from_secs(5),
+    )
+    .await
+}
+async fn exchange_with_store(
+    mut stream: UnixStream,
+    endpoint: wudo_protocol::v2::Endpoint,
+    storage: Option<crate::storage::Client>,
+    deadline: Instant,
+) -> Result<(), ()> {
+    use wudo_protocol::v2;
     let mut header = [0; 4];
     stream.read_exact(&mut header).await.map_err(|_| ())?;
-    let len = payload_len(header).map_err(|_| ())?;
-    let mut payload = [0; MAX_PAYLOAD];
-    stream
-        .read_exact(&mut payload[..len])
-        .await
-        .map_err(|_| ())?;
+    let len = v2::payload_len(header).map_err(|_| ())?;
+    let mut payload = vec![0; len];
+    stream.read_exact(&mut payload).await.map_err(|_| ())?;
     let mut extra = [0];
     if stream.read(&mut extra).await.map_err(|_| ())? != 0 {
         return Err(());
     }
-    let response = match decode_request(&payload[..len]) {
-        Ok(_) => Response::Ready,
-        Err(e) => Response::Error(e),
+    let version = v2::envelope_version(&payload).map_err(|_| ())?;
+    let bytes = if version == 2 {
+        let request = match v2::decode_request(&payload, endpoint) {
+            Ok(r) => r,
+            Err(error) => {
+                let mut bytes = [0; 4096];
+                let n = v2::encode_response(
+                    &mut bytes,
+                    &v2::Response::Error(error),
+                    &v2::Request::Status,
+                    endpoint,
+                )
+                .map_err(|_| ())?;
+                stream
+                    .write_all(&(n as u32).to_be_bytes())
+                    .await
+                    .map_err(|_| ())?;
+                stream.write_all(&bytes[..n]).await.map_err(|_| ())?;
+                return stream.shutdown().await.map_err(|_| ());
+            }
+        };
+        let result = match (&request, storage) {
+            (v2::Request::Status, _) => None,
+            (_, Some(client)) => {
+                use crate::storage::Command;
+                let command = match &request {
+                    v2::Request::StoreInitialize => Some(Command::Initialize),
+                    v2::Request::StoreUpgrade => Some(Command::Upgrade),
+                    v2::Request::UserCreate(v) => {
+                        Some(Command::Create(v.name.0.into(), v.label.0.into()))
+                    }
+                    v2::Request::UserInspect(v) => Some(Command::Inspect(v.name.0.into())),
+                    _ => None,
+                };
+                Some(match command {
+                    Some(c) => client.request(c, deadline.into_std()).await,
+                    None => Err(v2::Error::UnsupportedOperation),
+                })
+            }
+            _ => Some(Err(v2::Error::Unavailable)),
+        };
+        let response = match &result {
+            None => v2::Response::Status(v2::StatusResult {
+                status: v2::Ready::Ready,
+            }),
+            Some(Err(e)) => v2::Response::Error(*e),
+            Some(Ok(crate::storage::Reply::Ready)) => v2::Response::StoreReady(v2::StoreReady {
+                state: v2::Ready::Ready,
+            }),
+            Some(Ok(crate::storage::Reply::User(u))) => {
+                if matches!(request, v2::Request::UserCreate(_)) {
+                    v2::Response::UserCreated(v2::UserCreated {
+                        user_id: v2::UserId(*u.id.as_bytes()),
+                    })
+                } else {
+                    v2::Response::UserInfo(v2::UserInfo {
+                        user_id: v2::UserId(*u.id.as_bytes()),
+                        name: v2::Name(&u.name),
+                        label: v2::Label(&u.label),
+                    })
+                }
+            }
+        };
+        let mut out = vec![0; request.operation().response_limit()];
+        let n = v2::encode_response(&mut out, &response, &request, endpoint).map_err(|_| ())?;
+        out.truncate(n);
+        out
+    } else {
+        if len > MAX_PAYLOAD {
+            return Err(());
+        }
+        let response = match decode_request(&payload) {
+            Ok(_) => Response::Ready,
+            Err(e) => Response::Error(e),
+        };
+        encode_response(response).map_err(|_| ())?.as_ref().to_vec()
     };
-    let bytes = encode_response(response).map_err(|_| ())?;
     stream
-        .write_all(&(bytes.as_ref().len() as u32).to_be_bytes())
+        .write_all(&(bytes.len() as u32).to_be_bytes())
         .await
         .map_err(|_| ())?;
-    stream.write_all(bytes.as_ref()).await.map_err(|_| ())?;
+    stream.write_all(&bytes).await.map_err(|_| ())?;
     stream.shutdown().await.map_err(|_| ())
 }
 
@@ -44,6 +129,8 @@ fn admit(
     capacity: &Arc<Semaphore>,
     tasks: &mut JoinSet<()>,
     duration: Duration,
+    endpoint: wudo_protocol::v2::Endpoint,
+    storage: Option<crate::storage::Client>,
 ) {
     let deadline = Instant::now() + duration;
     let Ok(permit) = Arc::clone(capacity).try_acquire_owned() else {
@@ -57,8 +144,12 @@ fn admit(
     }
     tasks.spawn(async move {
         let _permit = permit;
-        // Cancellation is safe only because this slice has no side effects.
-        let _ = timeout_at(deadline, exchange(stream)).await;
+        // Dropping the reply receiver cancels queued work, never a started transaction.
+        let _ = timeout_at(
+            deadline,
+            exchange_with_store(stream, endpoint, storage, deadline),
+        )
+        .await;
     });
 }
 
@@ -69,6 +160,7 @@ pub(crate) async fn serve(
     web_uid: u32,
     duration: Duration,
     shutdown: impl Future<Output = ()>,
+    storage: Option<crate::storage::Client>,
 ) -> Result<(), ()> {
     let admin_capacity = Arc::new(Semaphore::new(4));
     let web_capacity = Arc::new(Semaphore::new(4));
@@ -84,11 +176,11 @@ pub(crate) async fn serve(
                 if completed.is_some_and(|r| r.is_err()) { break Err(()); }
             }
             result = admin.accept() => match result {
-                Ok((stream, _)) => admit(stream, admin_uid, &admin_capacity, &mut tasks, duration),
+                Ok((stream, _)) => admit(stream, admin_uid, &admin_capacity, &mut tasks, duration, wudo_protocol::v2::Endpoint::Admin, storage.clone()),
                 Err(_) => break Err(()),
             },
             result = web.accept() => match result {
-                Ok((stream, _)) => admit(stream, web_uid, &web_capacity, &mut tasks, duration),
+                Ok((stream, _)) => admit(stream, web_uid, &web_capacity, &mut tasks, duration, wudo_protocol::v2::Endpoint::Web, storage.clone()),
                 Err(_) => break Err(()),
             },
         }
@@ -134,9 +226,14 @@ mod tests {
                 let (client, server) = UnixStream::pair().unwrap();
                 let task = tokio::spawn(exchange(server));
                 let response = request(client, &body).await;
-                assert_eq!(decode_response(&response[4..]), Ok(expected));
+                if body == b"CANARY" {
+                    assert!(response.is_empty());
+                    assert!(task.await.unwrap().is_err());
+                } else {
+                    assert_eq!(decode_response(&response[4..]), Ok(expected));
+                    task.await.unwrap().unwrap();
+                }
                 assert!(!String::from_utf8_lossy(&response).contains("CANARY"));
-                task.await.unwrap().unwrap();
             }
         });
     }
@@ -183,18 +280,50 @@ mod tests {
             for _ in 0..4 {
                 let (c, s) = UnixStream::pair().unwrap();
                 clients.push(c);
-                admit(s, uid, &web, &mut tasks, Duration::from_secs(5));
+                admit(
+                    s,
+                    uid,
+                    &web,
+                    &mut tasks,
+                    Duration::from_secs(5),
+                    wudo_protocol::v2::Endpoint::Admin,
+                    None,
+                );
             }
             assert_eq!(web.available_permits(), 0);
             let (mut denied, s) = UnixStream::pair().unwrap();
-            admit(s, uid, &web, &mut tasks, Duration::from_secs(5));
+            admit(
+                s,
+                uid,
+                &web,
+                &mut tasks,
+                Duration::from_secs(5),
+                wudo_protocol::v2::Endpoint::Admin,
+                None,
+            );
             assert_eq!(denied.read(&mut [0]).await.unwrap(), 0);
             let (c, s) = UnixStream::pair().unwrap();
-            admit(s, uid, &admin, &mut tasks, Duration::from_secs(5));
+            admit(
+                s,
+                uid,
+                &admin,
+                &mut tasks,
+                Duration::from_secs(5),
+                wudo_protocol::v2::Endpoint::Admin,
+                None,
+            );
             let response = request(c, encode_request().unwrap().as_ref()).await;
             assert_eq!(decode_response(&response[4..]), Ok(Response::Ready));
             let (mut denied, s) = UnixStream::pair().unwrap();
-            admit(s, uid ^ 1, &admin, &mut tasks, Duration::from_secs(5));
+            admit(
+                s,
+                uid ^ 1,
+                &admin,
+                &mut tasks,
+                Duration::from_secs(5),
+                wudo_protocol::v2::Endpoint::Admin,
+                None,
+            );
             assert_eq!(denied.read(&mut [0]).await.unwrap(), 0);
             drop(clients);
             tasks.abort_all();
@@ -212,9 +341,17 @@ mod tests {
             let web = UnixListener::bind(base.join("web")).unwrap();
             let uid = rustix::process::geteuid().as_raw();
             let (stop, stopped) = tokio::sync::oneshot::channel();
-            let task = tokio::spawn(serve(admin, web, uid, uid, Duration::from_secs(5), async {
-                let _ = stopped.await;
-            }));
+            let task = tokio::spawn(serve(
+                admin,
+                web,
+                uid,
+                uid,
+                Duration::from_secs(5),
+                async {
+                    let _ = stopped.await;
+                },
+                None,
+            ));
             let mut idle = UnixStream::connect(base.join("web")).await.unwrap();
             let client = UnixStream::connect(base.join("admin")).await.unwrap();
             let reply = request(client, encode_request().unwrap().as_ref()).await;
@@ -228,6 +365,105 @@ mod tests {
                 .unwrap();
             assert_eq!(idle.read(&mut [0]).await.unwrap(), 0);
             std::fs::remove_dir_all(base).unwrap();
+        });
+    }
+}
+
+#[cfg(test)]
+mod administration_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    use wudo_protocol::v2 as v;
+    async fn call(
+        req: &v::Request<'_>,
+        endpoint: v::Endpoint,
+        client: crate::storage::Client,
+    ) -> Vec<u8> {
+        let (mut a, b) = UnixStream::pair().unwrap();
+        let task = tokio::spawn(exchange_with_store(
+            b,
+            endpoint,
+            Some(client),
+            Instant::now() + Duration::from_secs(5),
+        ));
+        let mut buf = [0; 4096];
+        let n = v::encode_request(&mut buf, req, v::Endpoint::Admin).unwrap();
+        a.write_all(&(n as u32).to_be_bytes()).await.unwrap();
+        a.write_all(&buf[..n]).await.unwrap();
+        a.shutdown().await.unwrap();
+        let mut reply = Vec::new();
+        a.read_to_end(&mut reply).await.unwrap();
+        let result = task.await.unwrap();
+        if endpoint == v::Endpoint::Web {
+            result.unwrap();
+            assert!(matches!(
+                v::decode_response(&reply[4..], &v::Request::Status, v::Endpoint::Web).unwrap(),
+                v::Response::Error(v::Error::NotPermitted)
+            ));
+        } else {
+            result.unwrap();
+        }
+        reply
+    }
+    #[test]
+    fn administrative_roundtrip_and_restart_reject_web_operations() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let worker = crate::storage::Worker::start(dir.path().into(), None).unwrap();
+        rt.block_on(async {
+            for req in [
+                v::Request::StoreInitialize,
+                v::Request::StoreUpgrade,
+                v::Request::UserCreate(v::UserCreate {
+                    name: v::Name("alice"),
+                    label: v::Label("Alice"),
+                }),
+                v::Request::UserInspect(v::UserInspect {
+                    name: v::Name("alice"),
+                }),
+            ] {
+                call(&req, v::Endpoint::Web, worker.client()).await;
+            }
+            assert!(!dir.path().join("identity.sqlite3").exists());
+            for req in [
+                v::Request::StoreInitialize,
+                v::Request::UserCreate(v::UserCreate {
+                    name: v::Name("alice"),
+                    label: v::Label("Alice"),
+                }),
+                v::Request::StoreUpgrade,
+            ] {
+                let reply = call(&req, v::Endpoint::Admin, worker.client()).await;
+                assert!(!matches!(
+                    v::decode_response(&reply[4..], &req, v::Endpoint::Admin).unwrap(),
+                    v::Response::Error(_)
+                ));
+            }
+            let req = v::Request::StoreInitialize;
+            let reply = call(&req, v::Endpoint::Admin, worker.client()).await;
+            assert!(matches!(
+                v::decode_response(&reply[4..], &req, v::Endpoint::Admin).unwrap(),
+                v::Response::Error(v::Error::Conflict)
+            ));
+        });
+        drop(worker);
+        let worker = crate::storage::Worker::start(dir.path().into(), None).unwrap();
+        rt.block_on(async {
+            let req = v::Request::UserInspect(v::UserInspect {
+                name: v::Name("alice"),
+            });
+            let reply = call(&req, v::Endpoint::Admin, worker.client()).await;
+            let v::Response::UserInfo(user) =
+                v::decode_response(&reply[4..], &req, v::Endpoint::Admin).unwrap()
+            else {
+                panic!("missing user")
+            };
+            assert_eq!(user.name.0, "alice");
+            assert_eq!(user.label.0, "Alice");
         });
     }
 }

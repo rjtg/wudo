@@ -1,5 +1,6 @@
 mod server;
 mod sockets;
+mod storage;
 
 use rustix::{
     fs::Mode,
@@ -55,6 +56,7 @@ fn main() -> ExitCode {
     }
 }
 fn run(uid: u32, gid: u32) -> Result<(), ()> {
+    let storage = storage::production()?;
     let dir = sockets::Directory::production()?;
     dir.absent("admin.sock")?;
     dir.absent("web.sock")?;
@@ -83,6 +85,7 @@ fn run(uid: u32, gid: u32) -> Result<(), ()> {
             uid,
             Duration::from_secs(wudo_protocol::DEADLINE_SECONDS),
             shutdown,
+            Some(storage.client()),
         )
         .await
     })

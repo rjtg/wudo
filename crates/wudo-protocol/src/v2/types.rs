@@ -301,3 +301,7 @@ map_struct!(RegistrationChallenge<'a> {
 map_struct!(ActionChallenge<'a> {
     ceremony_id: CeremonyId, remaining_ms: Number<120000>, options: RequestOptions<'a>
 } optional {});
+
+map_struct!(UserInspect<'a> { name: Name<'a> } optional {});
+map_struct!(UserInfo<'a> { user_id: UserId, name: Name<'a>, label: Label<'a> } optional {});
+map_struct!(StoreReady { state: Ready } optional {});

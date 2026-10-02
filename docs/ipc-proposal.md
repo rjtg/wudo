@@ -327,3 +327,12 @@ an incomplete connection. The host's `/run` is not changed. Run only trusted
 local builds because this test executes them as root. The maintainer ran this harness successfully with sudo and supplied the full
 passing transcript. This validates the tested Linux environment; it does not
 establish compatibility with every deployment filesystem.
+
+## Local administration extension
+
+The [approved administration contract](user-administration-proposal.md) adds
+v2 init/upgrade/create/show on the admin socket and requires a private root-owned
+`/var/lib/wudo` directory. v1 status encoding is preserved; the outer admission
+cap is now 64 KiB with version/operation limits after strict dispatch. Malformed
+envelopes close without a response. The updated smoke test isolates `/var/lib`
+as well as `/run` and verifies persistent users across restart.

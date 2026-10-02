@@ -610,3 +610,36 @@ fn maximum_field_requests_fit_caps_and_overlimit_fields_fail() {
         10421
     );
 }
+
+#[test]
+fn administrative_store_operations_are_strict_and_admin_only() {
+    for request in [
+        Request::StoreInitialize,
+        Request::StoreUpgrade,
+        Request::UserInspect(UserInspect {
+            name: Name("alice"),
+        }),
+    ] {
+        let bytes = encoded(&request, Endpoint::Admin);
+        assert!(decode_request(&bytes, Endpoint::Admin).unwrap() == request);
+        assert!(matches!(
+            decode_request(&bytes, Endpoint::Web),
+            Err(Error::NotPermitted)
+        ));
+        for n in 0..bytes.len() {
+            assert!(decode_request(&bytes[..n], Endpoint::Admin).is_err());
+        }
+        let response = if matches!(request, Request::UserInspect(_)) {
+            Response::UserInfo(UserInfo {
+                user_id: UID,
+                name: Name("alice"),
+                label: Label("Alice"),
+            })
+        } else {
+            Response::StoreReady(StoreReady {
+                state: Ready::Ready,
+            })
+        };
+        response_roundtrip(&response, &request, Endpoint::Admin);
+    }
+}

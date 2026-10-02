@@ -3,7 +3,7 @@
 These items must not be silently guessed by an implementation agent.
 
 The [SQLite identity storage contract](identity-persistence-proposal.md) records
-accepted isolated user storage. Production path validation/worker integration,
+accepted isolated user storage. The approved administration slice adds production path checks and a worker;
 credential persistence, grants and recovery remain later slices. The former
 custom snapshot and configuration-wide grant invalidation proposals were not adopted.
 

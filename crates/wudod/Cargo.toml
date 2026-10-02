@@ -10,4 +10,9 @@ workspace = true
 [dependencies]
 rustix = { version = "1", default-features = false, features = ["fs", "net", "process", "std"] }
 tokio = { version = "1", default-features = false, features = ["rt", "net", "io-util", "time", "sync", "signal", "macros"] }
-wudo-protocol = { version = "0.1.0", path = "../wudo-protocol" }
+wudo-protocol = { version = "0.1.0", path = "../wudo-protocol", features = ["v2"] }
+
+wudo-store = { path = "../wudo-store" }
+
+[dev-dependencies]
+tempfile = "3"
