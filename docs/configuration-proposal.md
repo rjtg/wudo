@@ -189,6 +189,10 @@ third-party error is retained in the public `ConfigError`. Unknown kinds are
 
 ## Runtime guarantees this validator cannot provide
 
+The [SQLite identity storage contract](identity-persistence-proposal.md) records
+the accepted isolated user-storage slice. Grant binding, privileged runtime
+loading and recovery remain separate gates.
+
 A successful offline check does not verify root ownership/permissions, safe
 symlink handling, trusted parent directories, safe executable/unit definitions,
 actual LUKS identity or version, uniqueness of live device matches, mapping

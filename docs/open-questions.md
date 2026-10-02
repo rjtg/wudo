@@ -2,6 +2,11 @@
 
 These items must not be silently guessed by an implementation agent.
 
+The [SQLite identity storage contract](identity-persistence-proposal.md) records
+accepted isolated user storage. Production path validation/worker integration,
+credential persistence, grants and recovery remain later slices. The former
+custom snapshot and configuration-wide grant invalidation proposals were not adopted.
+
 ## 1. Daemon-side WebAuthn ceremony details
 
 Tracking: [#12](https://github.com/rjtg/wudo/issues/12).

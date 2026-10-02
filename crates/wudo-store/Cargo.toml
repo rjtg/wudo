@@ -1,0 +1,16 @@
+[package]
+name = "wudo-store"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+rusqlite = { version = "0.40", default-features = false, features = ["bundled", "limits"] }
+getrandom = "0.4"
+rustix = { version = "1", default-features = false, features = ["process", "std"] }
+
+[dev-dependencies]
+tempfile = "3"

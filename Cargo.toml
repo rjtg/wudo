@@ -2,6 +2,7 @@
 members = [
     "crates/wudo-core",
     "crates/wudo-protocol",
+    "crates/wudo-store",
     "crates/wudod",
     "crates/wudo-web",
     "crates/wudo-cli",
