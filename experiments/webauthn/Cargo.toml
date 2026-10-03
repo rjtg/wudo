@@ -20,3 +20,4 @@ uuid = { version = "1", features = ["v4"] }
 serde_json = "1"
 wudo-protocol = { path = "../../crates/wudo-protocol", features = ["v2"] }
 openssl = "0.10"
+webauthn-rs-core = { version = "=0.5.5", default-features = false }

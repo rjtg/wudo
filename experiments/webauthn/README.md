@@ -61,6 +61,14 @@ daemon integration. These results do not finish #12 or validate untested policie
 
 ## Remaining gates
 
+The [parser-gap investigation](../../docs/webauthn-parser-gap.md) adds three
+parser-only characterization tests (15 experiment tests total). The direct
+`webauthn-rs-core` dev dependency exposes the pinned library's existing parser
+for those tests only. It accepts structures outside Wudo's stricter profile;
+post-parse checks cannot recover lost duplicate-key evidence. No custom parser,
+production dependency was introduced by the tests. The maintainer subsequently
+deferred the extra inner restrictions; they no longer block enrollment work.
+
 No real browser/authenticator or Raspberry Pi/ARM test has run. Counter anomaly
 handling, backup flags, cross-origin/topOrigin policy, credential uniqueness,
 userHandle handling, supported algorithm coverage, parsing bounds/extension
@@ -104,9 +112,9 @@ No application runtime dependency or enrollment handler changed.
   parser is introduced. Browser option projection, client extension variants and
   nonempty user handles are not covered by this test.
 
-Remaining parser gate: authenticator-data internals, including COSE and extension
+Deferred parser hardening: authenticator-data internals, including COSE and extension
 CBOR, remain opaque to Wudo's codec. Pinned core source uses internal CBOR parser
-paths; this slice does not establish the required duplicate/depth/item limits
-there. Resolve that through established library facilities before runtime
-handlers. Public-credential serialization feasibility does not settle activation,
+paths; Wudo does not enforce the extra duplicate/depth/item/trailing-byte
+restrictions there. The maintainer accepted that behavior for now; implementation
+is deferred, not a runtime integration gate. Public-credential serialization feasibility does not settle activation,
 revocation, ownership, replay consumption or durable update policy.

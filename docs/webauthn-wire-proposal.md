@@ -294,17 +294,22 @@ implementation must not add a mock action path to demonstrate authentication.
 
 ## Opaque WebAuthn fields are still untrusted
 
+The [pinned parser investigation](webauthn-parser-gap.md) confirms that its
+existing authenticator-data APIs do not enforce these inner constraints.
+The maintainer explicitly deferred these additional authenticator-data checks
+on 2026-10-03; they no longer gate runtime integration.
+
 Frame limits do not bound the complexity of embedded JSON/CBOR automatically.
 Before library verification, enforce inner bounds with established parsers:
 `client_data` JSON <=8 nesting levels, <=64 total members/elements, no duplicate
 keys; attestation CBOR <=8 container levels, <=256 items, no duplicate map keys,
 tags or indefinite lengths. Fail on lengths exceeding remaining input and
-reject trailing documents/items. Apply the same bounded CBOR rules to any authenticator-data extension block,
-using the verifier/library's structural facilities rather than custom crypto
-parsing. If available APIs cannot enforce these limits, resolve that gap before
-runtime integration. These conservative compatibility restrictions
-need fixture coverage; do not write a custom cryptographic parser or assume a
-Serde default silently enforces them.
+reject trailing documents/items in the JSON and attestation-object containers.
+Inside opaque authenticator data, duplicate rejection, trailing-byte rejection,
+definite-only CBOR and the proposed eight-level/256-item budgets are deferred,
+not currently enforced by Wudo. Rely on the established verifier's existing
+parser safeguards and retain hard field byte caps. Do not introduce a custom
+parser or silently claim these deferred checks are implemented.
 
 The JSON envelope's known fields must have WebAuthn types. Unknown inner JSON
 members, including new standards fields, are rejected in this initial strict
@@ -421,12 +426,10 @@ duplicate keys, bounded embedded documents and maximum-field request sizes.
 Fixtures are structural, not verified WebAuthn ceremonies. The codec preserves
 signed input bytes and performs no authentication or authorization.
 
-Remaining integration gates: durable state and atomic ceremony transitions;
-verifier option mapping and browser compatibility; structural limits inside
-opaque authenticator-data byte strings (including extension/COSE structures).
-The codec bounds client-data JSON and attestation CBOR containers, but does not
-parse authenticator-data internals. Close that gap through established library
-facilities before enabling handlers, without a handwritten authenticator parser.
+Remaining integration gates: durable state and atomic ceremony transitions,
+verifier option mapping and browser compatibility. Additional structural checks
+inside opaque authenticator-data byte strings (COSE/extensions) are explicitly
+deferred; the codec still bounds client-data JSON and attestation containers.
 
 ## Compatibility evidence
 
@@ -436,5 +439,5 @@ serialization/reload. It also records two adapter requirements: compare verified
 registration IDs with the outer wire ID, and preserve the strict rejection of
 upstream-generated `tokenBinding:null` unless a future review changes the profile.
 The positive fixture signs compliant client data from the outset; it never strips
-fields from already signed bytes. Inner authenticator-data parsing and actual
-browser compatibility remain gates before enabling enrollment.
+fields from already signed bytes. Additional inner authenticator-data checks are deferred; actual browser
+compatibility remains to be validated before enabling enrollment.

@@ -15,8 +15,9 @@ The [ceremony proposal](webauthn-proposal.md) now records candidate policies,
 enrollment risks, limits and tests. Its core policies are accepted;
 the [message contract](webauthn-wire-proposal.md) and codec slice are accepted.
 The opt-in v2 codec implements fields, limits and endpoint rules. Persistence
-ordering, verifier adapter compatibility and bounded authenticator-data parsing
-remain gates before runtime handlers.
+ordering and verifier adapter compatibility remain gates before runtime handlers.
+Additional inner authenticator-data parsing restrictions are explicitly deferred;
+see the [accepted decision](webauthn-parser-gap.md).
 
 Decided: `wudod` creates challenges, verifies actual WebAuthn registration/authentication responses, and checks user authorization. `wudo-web` relays messages; neither it nor the UI can assert trusted authentication or authorization.
 

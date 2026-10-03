@@ -115,6 +115,22 @@ Browser activity cannot extend these deadlines. Consume each challenge before
 verification, including failed attempts; retries need fresh challenges. Restart
 invalidates pending ceremonies, enrollment opportunities and inactive candidates.
 
+## Deferred inner authenticator-data hardening
+
+Accepted on 2026-10-03: rely on the established WebAuthn verifier's current
+parsing behavior inside authenticator data for now. Wudo's additional duplicate
+CBOR key rejection, rejection of trailing authenticator-data bytes,
+indefinite-length CBOR ban and proposed eight-level/256-item limits are not
+currently enforced there. Their implementation is deferred and does not block
+enrollment integration. This accepts the documented parser behavior; it does
+not claim those checks have been fixed or that authentication can be bypassed.
+See [evidence and scope](docs/webauthn-parser-gap.md).
+
+Existing outer IPC, client-data JSON and attestation-container validation and
+byte caps remain mandatory, as do the library's built-in safeguards, actual
+WebAuthn verification, single-use ceremonies and independent authorization.
+No custom parser or patched verifier is required by the deferred rules.
+
 ## One verification per action
 
 Each action invocation requires a fresh daemon-verified passkey assertion bound
