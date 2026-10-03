@@ -75,3 +75,38 @@ authorization and does not establish the intent shown by an untrusted UI.
 Sources inspected: the downloaded 0.5.5 crate source and
 [verifier API](https://docs.rs/webauthn-rs/0.5.5/webauthn_rs/struct.Webauthn.html),
 [builder API](https://docs.rs/webauthn-rs/0.5.5/webauthn_rs/struct.WebauthnBuilder.html).
+
+## Wire and credential compatibility slice
+
+Four additional tests bring this harness to twelve tests. It now uses the
+existing `wudo-protocol/v2` crate as a dev dependency. OpenSSL and serde_json are
+direct dev dependencies for fixtures; both were already in the experiment graph.
+No application runtime dependency or enrollment handler changed.
+
+- A high-level public `Passkey` survives JSON serialization/reload, verifies an
+  assertion, persists updated metadata, and verifies again after another reload.
+  This synthetic credential fits 16 KiB; that is not a maximum-size guarantee or
+  approval of an unversioned production format. Strict stored-record validation,
+  historical compatibility and other algorithms remain open.
+- Registration verification uses the credential ID inside attestation. Changing
+  outer `id`/`rawId` does not change the verified identity. The adapter must compare
+  the verifier-returned ID with wire `credential_id` before candidate binding,
+  fingerprint display or persistence. Verification success alone does not validate
+  an outer ID.
+- Upstream SoftPasskey emits `tokenBinding:null`. The verifier accepts it, but
+  Wudo's approved strict client-data profile rejects it. The test characterizes
+  this mismatch without relaxing the policy. Browser compatibility still needs
+  measurement before deciding whether the profile should change.
+- The positive wire fixture constructs compliant client-data JSON BEFORE signing,
+  hashes it through OpenSSL and calls upstream's hashed-client-data authenticator
+  API. Registration and assertion cross Wudo encode/decode without modifying signed
+  bytes and verify successfully. No custom authenticator-data or cryptographic
+  parser is introduced. Browser option projection, client extension variants and
+  nonempty user handles are not covered by this test.
+
+Remaining parser gate: authenticator-data internals, including COSE and extension
+CBOR, remain opaque to Wudo's codec. Pinned core source uses internal CBOR parser
+paths; this slice does not establish the required duplicate/depth/item limits
+there. Resolve that through established library facilities before runtime
+handlers. Public-credential serialization feasibility does not settle activation,
+revocation, ownership, replay consumption or durable update policy.

@@ -427,3 +427,14 @@ opaque authenticator-data byte strings (including extension/COSE structures).
 The codec bounds client-data JSON and attestation CBOR containers, but does not
 parse authenticator-data internals. Close that gap through established library
 facilities before enabling handlers, without a handwritten authenticator parser.
+
+## Compatibility evidence
+
+The isolated [verifier harness](../experiments/webauthn/README.md) now exercises
+signed registration/assertion roundtrips through this codec and public credential
+serialization/reload. It also records two adapter requirements: compare verified
+registration IDs with the outer wire ID, and preserve the strict rejection of
+upstream-generated `tokenBinding:null` unless a future review changes the profile.
+The positive fixture signs compliant client data from the outset; it never strips
+fields from already signed bytes. Inner authenticator-data parsing and actual
+browser compatibility remain gates before enabling enrollment.
