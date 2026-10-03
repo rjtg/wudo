@@ -76,12 +76,10 @@ never initializes missing state, downgrades, resets, or loads SQL from disk.
 On a current database it succeeds without schema changes. Startup never runs
 migrations. Migration failure leaves the worker unavailable until restart.
 
-Schema v1 remains the only released layout in this slice, so there is no older
-supported production schema requiring an upgrade yet. Each future migration
-must include a validator for its historical layouts before those versions are
-admitted to maintenance mode. Version 0, unknown newer versions and forged
-version/schema combinations are rejected. No artificial production migration
-was added for testing; a synthetic failing v2 tests transaction rollback.
+Schema v2 adds durable credential records; validated v1 stores require explicit
+upgrade and retain their users. Both historical and current layouts have exact
+validators. Version 0, unknown newer versions and forged version/schema
+combinations are rejected. A synthetic failed migration tests rollback.
 Released migrations are append-only and embedded in the binary. Tests must
 check old records and final schemas, not just the version counter.
 
@@ -120,7 +118,7 @@ manager forced termination remains possible, with SQLite recovery on restart.
 - CLI argument limits, safe output and verification of the daemon's kernel UID.
 - Isolated privileged deployment smoke test supplied separately for maintainer use.
 
-Credential serialization, enrollment verification, installation RP/origin binding,
+Enrollment verification, installation RP/origin binding,
 grants, future schema transformations and backup recovery remain separate slices. Creating a user
 does not establish any of them.
 

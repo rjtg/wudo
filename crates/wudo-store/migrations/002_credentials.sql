@@ -1,0 +1,1 @@
+CREATE TABLE credentials (id BLOB PRIMARY KEY NOT NULL CHECK(length(id) BETWEEN 1 AND 1023), user_id BLOB NOT NULL REFERENCES users(id), format INTEGER NOT NULL CHECK(format=1), record BLOB NOT NULL CHECK(length(record) BETWEEN 1 AND 16384), revoked INTEGER NOT NULL CHECK(revoked IN (0,1))) STRICT;

@@ -2,6 +2,9 @@
 //! Not a privileged path resolver or an authentication/authorization API.
 //! The caller must keep the directory and its ancestors stable and trusted for
 //! the store lifetime. No daemon integration or network-selected paths.
+mod credentials;
+pub use credentials::{MAX_ACTIVE_CREDENTIALS, MAX_CREDENTIALS, RECORD_FORMAT};
+
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 use std::{
     fs,
@@ -12,11 +15,12 @@ use std::{
 
 pub const MAX_USERS: usize = 64;
 const APP_ID: i64 = 0x5755444f;
-pub const SCHEMA_VERSION: usize = 1;
+pub const SCHEMA_VERSION: usize = 2;
 fn migrations() -> rusqlite_migration::Migrations<'static> {
-    rusqlite_migration::Migrations::new(vec![rusqlite_migration::M::up(include_str!(
-        "../migrations/001_users.sql"
-    ))])
+    rusqlite_migration::Migrations::new(vec![
+        rusqlite_migration::M::up(include_str!("../migrations/001_users.sql")),
+        rusqlite_migration::M::up(include_str!("../migrations/002_credentials.sql")),
+    ])
 }
 const MAX_DB: u64 = 4 * 1024 * 1024;
 const SCHEMA: &str = "CREATE TABLE users (id BLOB PRIMARY KEY NOT NULL CHECK(length(id)=16), name TEXT NOT NULL UNIQUE CHECK(length(CAST(name AS BLOB)) BETWEEN 1 AND 64), label TEXT NOT NULL CHECK(length(CAST(label AS BLOB)) BETWEEN 1 AND 128)) STRICT";
@@ -249,7 +253,7 @@ impl Store {
         let c = &self.connection;
         let app: i64 = c.query_row("PRAGMA application_id", [], |r| r.get(0))?;
         let version: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if app != APP_ID || version != 1 {
+        if app != APP_ID || !(1..=SCHEMA_VERSION as i64).contains(&version) {
             return Err(Error::UnsupportedSchema);
         }
         let check: String = c.query_row("PRAGMA quick_check(1)", [], |r| r.get(0))?;
@@ -266,7 +270,7 @@ impl Store {
             [],
             |r| r.get(0),
         )?;
-        if count != 1 || schema != SCHEMA {
+        if count != version || schema != SCHEMA {
             return Err(Error::InvalidStore);
         }
         let mut stmt = c.prepare("SELECT id, name, label FROM users LIMIT 65")?;
@@ -278,6 +282,9 @@ impl Store {
         }
         if count > MAX_USERS {
             return Err(Error::InvalidStore);
+        }
+        if version == 2 {
+            self.validate_credentials()?;
         }
         Ok(())
     }
@@ -380,7 +387,9 @@ mod migration_tests {
         use rusqlite_migration::{M, Migrations};
         migrations().validate().unwrap();
         let mut c = Connection::open_in_memory().unwrap();
-        migrations().to_latest(&mut c).unwrap();
+        Migrations::new(vec![M::up(include_str!("../migrations/001_users.sql"))])
+            .to_latest(&mut c)
+            .unwrap();
         let sql: String = c
             .query_row(
                 "SELECT sql FROM sqlite_schema WHERE name='users'",

@@ -30,9 +30,9 @@ No ORM, pool, extension loading, SQL scripts from clients or configurable VFS.
 - Explicit `initialize(directory)` creates `identity.sqlite3` exclusively.
   Existing files are never overwritten, migrated, repaired or reset.
 - `open(directory)` requires an existing database with Wudo application ID
-  `0x5755444f`, schema version 1, and the exact expected schema. Unknown versions,
+  `0x5755444f`, schema version 2, and the exact expected schema. Unknown versions,
   extra tables/views/triggers and invalid persisted users fail closed.
-- The sole STRICT table contains a 16-byte UUIDv4 user ID, unique name and label.
+- The users STRICT table contains a 16-byte UUIDv4 user ID, unique name and label.
   IDs come from the OS random source and are generated inside `create_user`.
   Names follow the v2 grammar (1–64 ASCII bytes); labels are 1–128 UTF-8 bytes
   without control characters. There are at most 64 users.
@@ -40,7 +40,7 @@ No ORM, pool, extension loading, SQL scripts from clients or configurable VFS.
   transaction for uniqueness/capacity checks and insertion. Return success only
   after commit. UUID collisions fail rather than replacing another identity.
 - Look up by typed ID or validated name. Absence is distinct from a storage
-  failure. No credential, grant, disable, deletion or rename operation exists.
+  failure. No grant, user disable, deletion or rename operation exists.
   Creating a user confers no permissions.
 - Errors are fixed categories without source errors, SQL, paths or user values.
   User records and IDs deliberately do not implement Debug.
@@ -63,7 +63,7 @@ allows inspection after reconnect without implying idempotent creation.
 The database and existing journal are capped at 4 MiB before open; 4096-byte
 pages and a 1024-page ceiling bound database growth. SQLite value and SQL limits
 are 64 KiB and 4096 bytes; attached databases are disabled. Opening runs a bounded
-`quick_check(1)`, exact schema comparison and validation of at most 65 user rows.
+`quick_check(1)`, exact schema comparison and validation of at most 65 user rows and 1025 credential rows.
 These checks are for trusted local state, not a public database-upload parser.
 
 Missing, corrupt, incompatible and partially initialized files fail closed.
@@ -97,9 +97,8 @@ The [local user administration contract](user-administration-proposal.md)
 implements initialize/upgrade/create/show, root-only dispatch, production path
 checks and a bounded worker lifecycle.
 
-- Established verifier credential serialization and its size/compatibility tests.
-- Credential activation/revocation, grant binding, RP/origin binding, migrations
-  and local recovery policy. No earlier proposal for these is implicitly accepted.
+- Enrollment integration, credential metadata updates after authentication, grant
+  binding, RP/origin binding and local recovery policy remain separate work.
 - Pending ceremonies, tickets and candidates remain memory-only and never belong
   in the database; restart invalidates them under the accepted ceremony policy.
 
@@ -115,3 +114,36 @@ remain integration work; the unit tests do not substitute for those checks.
 References: [SQLite atomic commit](https://www.sqlite.org/atomiccommit.html),
 [SQLite synchronous settings](https://www.sqlite.org/pragma.html#pragma_synchronous),
 and [rusqlite](https://docs.rs/rusqlite/0.40.2/rusqlite/).
+
+## Durable credential records (schema v2)
+
+The approved storage slice adds a STRICT credentials table linked to users.
+Activation, active lookup for a specified owner, and terminal revocation are
+trusted internal APIs only; no new IPC handlers or CLI commands are enabled.
+The caller must verify the registration and enforce ceremony/approval binding.
+Passing a library `Passkey` alone is not proof of verification.
+
+Credential IDs are globally unique, 1–1023 bytes. Revoked records remain stored
+and cannot be reactivated or reassigned. Limits are 16 active credentials per
+user and 1024 total records including revoked credentials. These are ceilings,
+not guaranteed capacity: the existing 4 MiB database limit still applies.
+
+Record format 1 is the pinned webauthn-rs 0.5.5 public `Passkey` serialized as
+JSON, bounded to 16 KiB. Reads require the writer's exact reserialization,
+a matching credential ID, and the known format version; unknown or duplicate
+fields and incompatible records fail closed. This is a private storage format,
+not the IPC encoding. Library upgrades must explicitly assess compatibility and
+introduce a record migration when necessary. No private authenticator key or
+plaintext downstream secret is stored. The dependency uses OpenSSL; workspace
+CI installs its native build prerequisites.
+
+Initialization creates schema v2. Valid v1 stores remain maintenance-only until
+explicit `wudo upgrade`, which preserves users and adds the empty credential
+table transactionally. Historical schemas are validated before migration.
+Tests cover a genuine verified credential surviving restart and verifying an
+assertion, owner isolation, duplicate IDs, terminal revocation, capacity,
+corrupt/incompatible records, and v1-to-v2 preservation.
+
+Authentication must still recheck current credential status at admission and
+persist verifier metadata updates in a future slice. A previously returned
+credential clone does not prove that the credential remains active.
