@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Linux deployment smoke test; run after cargo build --workspace --locked.
+"""Linux deployment smoke test; builds matching workspace binaries first.
 
 Usage: python3 scripts/ipc-smoke.py
 Prompts through sudo, then uses a private mount namespace and temporary /run and /var/lib.
@@ -26,6 +26,15 @@ def check(condition, message):
     if not condition:
         raise RuntimeError(message)
     print("PASS:", message, flush=True)
+
+
+def check_cli(result, message):
+    if result.returncode != 0:
+        # Enrollment stdout can contain a private ticket. Never print it here.
+        raise RuntimeError(
+            f"{message} (exit {result.returncode}): {result.stderr.strip()}"
+        )
+    check(True, message)
 
 
 def probe(path, uid, gid, allowed):
@@ -97,11 +106,25 @@ def isolated(original_namespace):
             check(result.returncode == 0 and "Daemon IPC reachable" in result.stdout,
                   "production CLI verifies root daemon")
             if stop_signal == signal.SIGTERM:
-                for args in [("init",), ("user", "create", "alice", "--label", "Alice"), ("upgrade",)]:
+                for args in [("init", "--origin", "https://wudo.example.test"), ("user", "create", "alice", "--label", "Alice"), ("upgrade",)]:
                     result = subprocess.run([str(CLI), *args], capture_output=True, text=True, timeout=6)
-                    check(result.returncode == 0, "administrative CLI " + args[0])
+                    check_cli(result, "administrative CLI " + args[0])
             result = subprocess.run([str(CLI), "user", "show", "alice"], capture_output=True, text=True, timeout=6)
             check(result.returncode == 0 and "Alice" in result.stdout, "persistent user inspection")
+            for flags in [[], ["--insecure"]]:
+                opened = subprocess.run([str(CLI), "enroll", "alice", *flags], capture_output=True, text=True, timeout=6)
+                check_cli(opened, "local enrollment open")
+                enrollment_id = next(line.split(": ", 1)[1] for line in opened.stdout.splitlines() if line.startswith("Enrollment: "))
+                for action in ["inspect", "cancel"]:
+                    result = subprocess.run([str(CLI), "enroll", action, enrollment_id], capture_output=True, text=True, timeout=6)
+                    check_cli(result, "local enrollment " + action)
+            if stop_signal == signal.SIGTERM:
+                result = subprocess.run([str(CLI), "init", "--reset", "--yes", "--origin", "https://wudo.example.test"], capture_output=True, text=True, timeout=6)
+                check_cli(result, "explicit isolated installation reset")
+                result = subprocess.run([str(CLI), "user", "show", "alice"], capture_output=True, text=True, timeout=6)
+                check(result.returncode != 0, "reset removed previous identity")
+                result = subprocess.run([str(CLI), "user", "create", "alice", "--label", "Alice"], capture_output=True, text=True, timeout=6)
+                check_cli(result, "fresh identity after reset")
             probe("/run/wudo/admin.sock", 0, 0, True)
             probe("/run/wudo/admin.sock", 61001, 61001, False)
             probe("/run/wudo/web.sock", 61001, 61001, True)
@@ -131,8 +154,14 @@ if __name__ == "__main__":
     if len(sys.argv) == 3 and sys.argv[1] == "--isolated":
         isolated(sys.argv[2])
     elif len(sys.argv) == 1:
-        if not DAEMON.is_file() or not CLI.is_file():
-            sys.exit("Run cargo build --workspace --locked first.")
+        # cargo test need not refresh target/debug/wudod. Build both executables
+        # before sudo so this check cannot silently use an older daemon.
+        result = subprocess.run(
+            ["cargo", "build", "--workspace", "--locked", "--target-dir", str(ROOT / "target")],
+            cwd=ROOT,
+        )
+        if result.returncode != 0:
+            sys.exit(result.returncode)
         command = ["unshare", "--mount", "--propagation", "private",
                    sys.executable, str(Path(__file__).resolve()), "--isolated",
                    os.readlink("/proc/self/ns/mnt")]

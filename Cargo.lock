@@ -1473,6 +1473,7 @@ dependencies = [
  "minicbor",
  "serde",
  "serde_json",
+ "url",
 ]
 
 [[package]]
@@ -1487,6 +1488,7 @@ dependencies = [
  "tempfile",
  "webauthn-authenticator-rs",
  "webauthn-rs",
+ "wudo-protocol",
 ]
 
 [[package]]
@@ -1497,9 +1499,17 @@ version = "0.1.0"
 name = "wudod"
 version = "0.1.0"
 dependencies = [
+ "base64",
+ "getrandom 0.4.3",
+ "openssl",
+ "rusqlite",
  "rustix",
+ "serde_json",
  "tempfile",
  "tokio",
+ "webauthn-authenticator-rs",
+ "webauthn-rs",
+ "webauthn-rs-proto",
  "wudo-protocol",
  "wudo-store",
 ]

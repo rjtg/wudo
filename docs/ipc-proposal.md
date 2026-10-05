@@ -311,21 +311,27 @@ configuration or establish WebAuthn readiness. The web service remains a stub.
 
 ### Isolated privileged smoke test
 
-After `cargo build --workspace --locked`, run:
+Run:
 
 ```text
 python3 scripts/ipc-smoke.py
 ```
 
-The script prompts through sudo and requires Linux `unshare`, `mount`, Python 3,
-and mount-namespace privileges. It mounts a temporary `/run` inside a private
+The script first runs `cargo build --workspace --locked` with the repository's
+`target` directory, then prompts through sudo. This keeps the CLI and daemon
+binaries in sync, including after test-only builds. It requires Cargo, Linux
+`unshare`, `mount`, Python 3, and mount-namespace privileges.
+It mounts temporary `/run` and `/var/lib` directories inside a private
 mount namespace, runs the production binaries, and uses child processes with
 numeric UIDs/GIDs (no persistent accounts). It checks root CLI access, allowed
 web access, rejection of another UID in the web group, rejection of root on the
 web endpoint, socket modes, duplicate startup, SIGTERM/SIGINT, and cleanup with
-an incomplete connection. The host's `/run` is not changed. Run only trusted
-local builds because this test executes them as root. The maintainer ran this harness successfully with sudo and supplied the full
-passing transcript. This validates the tested Linux environment; it does not
+an incomplete connection, plus initialization, user persistence, enrollment
+open/inspect/cancel, and explicit reset. The host's `/run` and `/var/lib` are not
+changed. Run only trusted local builds because this test executes them as root.
+The maintainer supplied a passing transcript for the expanded harness on
+2026-10-05, including both shutdown signals and persistence across restart.
+This validates the tested Linux environment; it does not
 establish compatibility with every deployment filesystem.
 
 ## Local administration extension

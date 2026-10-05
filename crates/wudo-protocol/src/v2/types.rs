@@ -305,3 +305,5 @@ map_struct!(ActionChallenge<'a> {
 map_struct!(UserInspect<'a> { name: Name<'a> } optional {});
 map_struct!(UserInfo<'a> { user_id: UserId, name: Name<'a>, label: Label<'a> } optional {});
 map_struct!(StoreReady { state: Ready } optional {});
+
+map_struct!(InstallationInitialize<'a> { origin: Text<'a, 270> } optional {});

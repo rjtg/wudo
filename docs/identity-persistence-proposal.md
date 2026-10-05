@@ -30,7 +30,7 @@ No ORM, pool, extension loading, SQL scripts from clients or configurable VFS.
 - Explicit `initialize(directory)` creates `identity.sqlite3` exclusively.
   Existing files are never overwritten, migrated, repaired or reset.
 - `open(directory)` requires an existing database with Wudo application ID
-  `0x5755444f`, schema version 2, and the exact expected schema. Unknown versions,
+  `0x5755444f`, schema version 3, and the exact expected schema. Unknown versions,
   extra tables/views/triggers and invalid persisted users fail closed.
 - The users STRICT table contains a 16-byte UUIDv4 user ID, unique name and label.
   IDs come from the OS random source and are generated inside `create_user`.
@@ -137,7 +137,7 @@ introduce a record migration when necessary. No private authenticator key or
 plaintext downstream secret is stored. The dependency uses OpenSSL; workspace
 CI installs its native build prerequisites.
 
-Initialization creates schema v2. Valid v1 stores remain maintenance-only until
+Initialization now creates schema v3 (including installation settings). Valid v1/v2 stores remain maintenance-only until
 explicit `wudo upgrade`, which preserves users and adds the empty credential
 table transactionally. Historical schemas are validated before migration.
 Tests cover a genuine verified credential surviving restart and verifying an
@@ -147,3 +147,10 @@ corrupt/incompatible records, and v1-to-v2 preservation.
 Authentication must still recheck current credential status at admission and
 persist verifier metadata updates in a future slice. A previously returned
 credential clone does not prove that the credential remains active.
+
+## Installation settings (schema v3)
+
+See [installation setup](installation-setup.md) for the root-only init command,
+canonical HTTPS origin validation, singleton storage and the explicit upgrade
+path. Upgrade never invents an origin. Existing unbound credentials prevent
+configuration; users alone can be preserved while configuring an upgraded store.

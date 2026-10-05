@@ -80,7 +80,7 @@ fn bounds_and_sql_values() {
 #[test]
 fn invalid_schema_and_records_fail_closed() {
     for sql in [
-        "PRAGMA user_version=3",
+        "PRAGMA user_version=4",
         "PRAGMA application_id=0",
         "CREATE TABLE extra(x)",
         "CREATE TRIGGER extra AFTER INSERT ON users BEGIN DELETE FROM users; END",

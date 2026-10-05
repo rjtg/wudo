@@ -65,6 +65,10 @@ async fn exchange_with_store(
                 use crate::storage::Command;
                 let command = match &request {
                     v2::Request::StoreInitialize => Some(Command::Initialize),
+                    v2::Request::InstallationInitialize(v) => {
+                        Some(Command::Configure(v.origin.0.into()))
+                    }
+                    v2::Request::InstallationReset(v) => Some(Command::Reset(v.origin.0.into())),
                     v2::Request::StoreUpgrade => Some(Command::Upgrade),
                     v2::Request::UserCreate(v) => {
                         Some(Command::Create(v.name.0.into(), v.label.0.into()))
@@ -74,37 +78,59 @@ async fn exchange_with_store(
                 };
                 Some(match command {
                     Some(c) => client.request(c, deadline.into_std()).await,
+                    None if matches!(
+                        request,
+                        v2::Request::EnrollmentOpen(_)
+                            | v2::Request::EnrollmentInspect(_)
+                            | v2::Request::EnrollmentCancel(_)
+                            | v2::Request::EnrollmentApprove(_)
+                            | v2::Request::RegistrationBegin(_)
+                            | v2::Request::RegistrationBeginInsecure
+                            | v2::Request::RegistrationFinish(_)
+                    ) =>
+                    {
+                        client
+                            .enrollment(endpoint, payload.clone(), deadline.into_std())
+                            .await
+                    }
                     None => Err(v2::Error::UnsupportedOperation),
                 })
             }
             _ => Some(Err(v2::Error::Unavailable)),
         };
-        let response = match &result {
-            None => v2::Response::Status(v2::StatusResult {
-                status: v2::Ready::Ready,
-            }),
-            Some(Err(e)) => v2::Response::Error(*e),
-            Some(Ok(crate::storage::Reply::Ready)) => v2::Response::StoreReady(v2::StoreReady {
-                state: v2::Ready::Ready,
-            }),
-            Some(Ok(crate::storage::Reply::User(u))) => {
-                if matches!(request, v2::Request::UserCreate(_)) {
-                    v2::Response::UserCreated(v2::UserCreated {
-                        user_id: v2::UserId(*u.id.as_bytes()),
-                    })
-                } else {
-                    v2::Response::UserInfo(v2::UserInfo {
-                        user_id: v2::UserId(*u.id.as_bytes()),
-                        name: v2::Name(&u.name),
-                        label: v2::Label(&u.label),
+        if let Some(Ok(crate::storage::Reply::Encoded(out))) = result {
+            out
+        } else {
+            let response = match &result {
+                None => v2::Response::Status(v2::StatusResult {
+                    status: v2::Ready::Ready,
+                }),
+                Some(Err(e)) => v2::Response::Error(*e),
+                Some(Ok(crate::storage::Reply::Ready)) => {
+                    v2::Response::StoreReady(v2::StoreReady {
+                        state: v2::Ready::Ready,
                     })
                 }
-            }
-        };
-        let mut out = vec![0; request.operation().response_limit()];
-        let n = v2::encode_response(&mut out, &response, &request, endpoint).map_err(|_| ())?;
-        out.truncate(n);
-        out
+                Some(Ok(crate::storage::Reply::Encoded(_))) => unreachable!(),
+                Some(Ok(crate::storage::Reply::User(u))) => {
+                    if matches!(request, v2::Request::UserCreate(_)) {
+                        v2::Response::UserCreated(v2::UserCreated {
+                            user_id: v2::UserId(*u.id.as_bytes()),
+                        })
+                    } else {
+                        v2::Response::UserInfo(v2::UserInfo {
+                            user_id: v2::UserId(*u.id.as_bytes()),
+                            name: v2::Name(&u.name),
+                            label: v2::Label(&u.label),
+                        })
+                    }
+                }
+            };
+            let mut out = vec![0; request.operation().response_limit()];
+            let n = v2::encode_response(&mut out, &response, &request, endpoint).map_err(|_| ())?;
+            out.truncate(n);
+            out
+        }
     } else {
         if len > MAX_PAYLOAD {
             return Err(());
@@ -416,7 +442,9 @@ mod administration_tests {
         let worker = crate::storage::Worker::start(dir.path().into(), None).unwrap();
         rt.block_on(async {
             for req in [
-                v::Request::StoreInitialize,
+                v::Request::InstallationInitialize(v::InstallationInitialize {
+                    origin: v::Text("https://wudo.example.test"),
+                }),
                 v::Request::StoreUpgrade,
                 v::Request::UserCreate(v::UserCreate {
                     name: v::Name("alice"),
@@ -430,7 +458,9 @@ mod administration_tests {
             }
             assert!(!dir.path().join("identity.sqlite3").exists());
             for req in [
-                v::Request::StoreInitialize,
+                v::Request::InstallationInitialize(v::InstallationInitialize {
+                    origin: v::Text("https://wudo.example.test"),
+                }),
                 v::Request::UserCreate(v::UserCreate {
                     name: v::Name("alice"),
                     label: v::Label("Alice"),
@@ -443,7 +473,9 @@ mod administration_tests {
                     v::Response::Error(_)
                 ));
             }
-            let req = v::Request::StoreInitialize;
+            let req = v::Request::InstallationInitialize(v::InstallationInitialize {
+                origin: v::Text("https://other.example.test"),
+            });
             let reply = call(&req, v::Endpoint::Admin, worker.client()).await;
             assert!(matches!(
                 v::decode_response(&reply[4..], &req, v::Endpoint::Admin).unwrap(),
@@ -451,6 +483,12 @@ mod administration_tests {
             ));
         });
         drop(worker);
+        let persisted = wudo_store::Store::open(dir.path()).unwrap();
+        assert_eq!(
+            persisted.installation_origin().unwrap().unwrap().as_str(),
+            "https://wudo.example.test"
+        );
+        drop(persisted);
         let worker = crate::storage::Worker::start(dir.path().into(), None).unwrap();
         rt.block_on(async {
             let req = v::Request::UserInspect(v::UserInspect {
@@ -467,3 +505,6 @@ mod administration_tests {
         });
     }
 }
+
+#[cfg(test)]
+mod enrollment_tests;

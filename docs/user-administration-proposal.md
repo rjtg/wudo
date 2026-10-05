@@ -12,31 +12,32 @@ daemon's kernel UID before sending a request. No command accepts a database path
 | CLI | v2 operation | Request body | Successful response body |
 | --- | --- | --- | --- |
 | `sudo wudo upgrade` | `store.upgrade` (new) | `{}` | `{state:"ready"}` |
-| `sudo wudo init` | `store.initialize` (new) | `{}` | `{state:"ready"}` |
+| `sudo wudo init [--origin HTTPS_ORIGIN]` | `installation.initialize` | `{origin: text}` | `{state:"ready"}` |
 | `sudo wudo user create NAME --label LABEL` | `user.create` (existing) | `{name:Name,label:Label}` | `{user_id:UserId}` (existing) |
 | `sudo wudo user show NAME` | `user.inspect` (new) | `{name:Name}` | `{user_id:UserId,name:Name,label:Label}` |
 
 Use existing typed name/label/UUID limits and strict CBOR v2 envelopes. All administrative
 operations have 4096-byte request/response caps. The web endpoint denies all
-four operations before dispatch. No listing, mutation of existing users,
-credentials, grants or generic database operation is added.
+these administrative operations before dispatch. Enrollment and explicit installation reset are now available as described in
+[enrollment](enrollment-implementation.md) and [setup](installation-setup.md).
+Targeted user mutation, credential inspection/revocation and grants remain later work.
 
 Creation prints the UUID; inspection prints the UUID, name and label with
 unambiguous escaping for terminal output. Neither says the user is enrolled or
 authorized. Exit codes: 0 success, 1 operation/transport failure, 2 usage.
 Errors remain category-only; never echo rejected argument values or SQL errors.
 
-Initializing an existing valid store returns `conflict`, not a reset or a
-success that could conceal the wrong installation. A missing user returns
+Initializing an already configured store returns `conflict`, never an overwrite.
+An upgraded, unconfigured store without credentials can be configured while
+preserving users; historical unbound credentials prevent configuration. A missing user returns
 `unavailable`. Duplicate names return `conflict`; exhausted user capacity or an
 uninitialized/unhealthy store returns `unavailable`; a full worker queue returns
 `busy`. Malformed schemas return `invalid-request`. Internal storage failures
 return `internal-error` and make identity operations unavailable until restart.
 
 Keep v1 status behavior unchanged. v2 status also only reports IPC readiness;
-it does not imply initialized identity storage or WebAuthn readiness. Enable
-only these administrative operations and status. Other v2 operations remain
-unsupported even though their codecs exist. Use the accepted bounded v2
+it does not imply initialized identity storage or WebAuthn readiness. Enrollment/registration operations are also enabled under their reviewed
+contract; action operations remain unsupported. Use the accepted bounded v2
 transport/version dispatch policy; never downgrade a mutating request to v1.
 
 ## Installation and startup
@@ -76,8 +77,9 @@ never initializes missing state, downgrades, resets, or loads SQL from disk.
 On a current database it succeeds without schema changes. Startup never runs
 migrations. Migration failure leaves the worker unavailable until restart.
 
-Schema v2 adds durable credential records; validated v1 stores require explicit
-upgrade and retain their users. Both historical and current layouts have exact
+Schema v3 adds singleton installation settings. Validated v1/v2 stores require
+explicit upgrade and retain their users/credentials. Installation setup is
+separate from upgrade; see [installation setup](installation-setup.md). Both historical and current layouts have exact
 validators. Version 0, unknown newer versions and forged version/schema
 combinations are rejected. A synthetic failed migration tests rollback.
 Released migrations are append-only and embedded in the binary. Tests must
@@ -85,9 +87,11 @@ check old records and final schemas, not just the version counter.
 
 ## Worker, timeouts and shutdown
 
-One dedicated thread owns the connection; no SQLite call runs on the Tokio
+One dedicated thread owns the connection and enrollment state; no SQLite call runs on the Tokio
 event-loop thread. Use a bounded queue of four commands plus one executing
-command, with nonblocking admission. Queue entries own bounded validated input
+command, with nonblocking admission for general administration. Enrollment requests await
+queue capacity within socket admission/deadline bounds. Two bounded verification
+jobs return completion to this owner; see the enrollment contract. Queue entries own bounded validated input
 and their response channel; no SQL or client filesystem paths enter the queue.
 
 Attach the existing five-second exchange deadline. Before starting a queued
@@ -129,7 +133,7 @@ with mode 0700 and no access/default ACLs. The daemon refuses missing or unsafe
 state directories. Then run the daemon with its existing web UID/GID arguments:
 
 ```text
-sudo wudo init
+sudo wudo init --origin https://wudo.home.example
 sudo wudo user create alice --label Alice
 sudo wudo user show alice
 sudo wudo upgrade
@@ -144,3 +148,12 @@ The smoke harness now isolates both `/run` and `/var/lib`, checks initialization
 creation, upgrade and inspection across restart in addition to peer permissions
 and signals. It must be run explicitly on a suitable host; unprivileged test
 success does not establish production ownership or power-loss behavior.
+
+## Accepted initialization refinement
+
+The maintainer moved installation address setup into `wudo init`: an explicit
+`--origin` parameter, or a prompt when omitted in an interactive terminal.
+The installation supports one origin, with RP ID derived from its hostname.
+Required future installation settings follow the same parameter/prompt pattern.
+Implemented locally; see [installation setup](installation-setup.md) for validation,
+legacy protocol compatibility, and upgrade/setup behavior.

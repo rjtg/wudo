@@ -37,8 +37,10 @@ Accepted installation policy: the administrator configures one HTTPS origin
 and an RP ID equal to that origin's hostname. Wudo hardcodes no installation
 hostname or domain. Match scheme, host and effective port exactly; no wildcard,
 subdomain or any-port acceptance. These are trusted daemon settings, separate
-from the web service's bind address. Configuration syntax and URL normalization
-rules remain to be specified before implementation.
+from the web service's bind address. The maintainer selected `wudo init --origin` with an interactive prompt when
+omitted; see [installation setup](installation-setup.md). Store the settings
+before enrollment and derive the RP ID from the hostname. URL normalization
+and the historical-store migration path remain implementation work.
 
 Proposed additional restriction: reject cross-origin iframe ceremonies and
 alternate/native-app origins initially.

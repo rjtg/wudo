@@ -1,4 +1,5 @@
 mod admin;
+mod enrollment;
 mod status;
 
 use rustix::fs::{Mode, OFlags, open};
@@ -9,6 +10,9 @@ fn main() -> ExitCode {
     // Consume a fixed number of arguments rather than collecting arbitrary input.
     let mut args = env::args_os().skip(1);
     let command = args.next();
+    if command.as_deref() == Some(std::ffi::OsStr::new("enroll")) {
+        return enrollment::run(args);
+    }
     if let Some(name @ ("init" | "upgrade" | "user")) = command.as_ref().and_then(|v| v.to_str()) {
         return admin::run(name, args);
     }

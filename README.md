@@ -71,15 +71,20 @@ Do not treat unresolved cryptographic or authorization protocol details as final
 The repository contains a minimal Cargo workspace using stable Rust:
 
 - `crates/wudo-core`: typed offline action/resource configuration and validation.
-- `crates/wudod`: daemon scaffold.
+- `crates/wudod`: Unix IPC daemon, identity storage and enrollment verification.
 - `crates/wudo-web`: web service scaffold.
-- `crates/wudo-cli`: offline configuration validator, with binary name `wudo`.
+- `crates/wudo-cli`: local administration and offline validation, binary name `wudo`.
 - `ui/wudo-ui`: reserved for the Rust/WASM frontend; not yet a Cargo crate.
 
-The core uses a TOML parser; the CLI uses safe Linux file-opening APIs. Daemon
-and web binaries remain dependency-free scaffolds. No root privileges are
-needed; no listeners, IPC, privileged execution, authentication or secret
-handling are implemented.
+The daemon uses Tokio, SQLite and the established webauthn-rs verifier. It
+requires root for runtime use; ordinary Cargo tests use isolated temporary state.
+The web service and Rust/WASM UI remain scaffolds. Privileged actions and secret
+transport are not implemented yet.
+
+Local setup and enrollment commands are documented in
+[installation setup](docs/installation-setup.md) and
+[enrollment](docs/enrollment-implementation.md). `wudo init --reset` is explicitly
+destructive to Wudo's identity state; normal init never overwrites it.
 
 Validate the example locally:
 

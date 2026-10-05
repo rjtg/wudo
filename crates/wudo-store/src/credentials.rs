@@ -31,6 +31,47 @@ fn decode(id: &[u8], format: i64, bytes: &[u8]) -> Result<Passkey> {
     Ok(key)
 }
 impl Store {
+    /// Includes retained revoked records; transient reservations are daemon-owned.
+    pub fn remaining_credential_capacity(&self) -> Result<usize> {
+        self.credentials_ready()?;
+        let count: i64 =
+            self.connection
+                .query_row("SELECT count(*) FROM credentials", [], |r| r.get(0))?;
+        Ok((MAX_CREDENTIALS - count).max(0) as usize)
+    }
+
+    /// Includes retained revoked IDs. Enrollment must never reuse them.
+    pub fn credential_id_exists(&self, id: &[u8]) -> Result<bool> {
+        self.credentials_ready()?;
+        if !valid_id(id) {
+            return Err(Error::InvalidInput);
+        }
+        Ok(self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM credentials WHERE id=?1)",
+            [id],
+            |r| r.get(0),
+        )?)
+    }
+    /// Trusted enrollment snapshot. Activation must recheck capacity atomically.
+    pub fn enrollment_credentials(&self, user: UserId) -> Result<Vec<Vec<u8>>> {
+        self.credentials_ready()?;
+        if self.user_by_id(user)?.is_none() {
+            return Err(Error::InvalidInput);
+        }
+        let total: i64 =
+            self.connection
+                .query_row("SELECT count(*) FROM credentials", [], |r| r.get(0))?;
+        let mut query = self
+            .connection
+            .prepare("SELECT id FROM credentials WHERE user_id=?1 AND revoked=0 LIMIT 17")?;
+        let ids = query
+            .query_map([user.as_bytes().as_slice()], |r| r.get::<_, Vec<u8>>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        if total >= MAX_CREDENTIALS || ids.len() >= MAX_ACTIVE_CREDENTIALS as usize {
+            return Err(Error::Capacity);
+        }
+        Ok(ids)
+    }
     fn credentials_ready(&self) -> Result<()> {
         if !self.healthy || self.needs_upgrade()? {
             return Err(Error::Unavailable);

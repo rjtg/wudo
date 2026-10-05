@@ -9,11 +9,16 @@ use std::{
     time::Instant,
 };
 use tokio::sync::{mpsc, oneshot};
-use wudo_protocol::v2::Error;
+use wudo_protocol::v2::{self as wire, Error};
 use wudo_store::{Store, User};
+use wudod::enrollment::{Enrollment, Verified};
 
 pub(crate) enum Command {
     Initialize,
+    Configure(String),
+    Reset(String),
+    Enrollment(wire::Endpoint, Vec<u8>),
+    Completed(Box<Verified>, Vec<u8>),
     Upgrade,
     Create(String, String),
     Inspect(String),
@@ -21,6 +26,7 @@ pub(crate) enum Command {
 pub(crate) enum Reply {
     Ready,
     User(User),
+    Encoded(Vec<u8>),
 }
 struct Job {
     command: Command,
@@ -31,12 +37,39 @@ struct Job {
 pub(crate) struct Client {
     tx: mpsc::Sender<Job>,
 }
+#[cfg(test)]
+struct VerificationGate {
+    started: oneshot::Sender<()>,
+    release: std::sync::mpsc::Receiver<()>,
+}
 pub(crate) struct Worker {
+    #[cfg(test)]
+    gate: Arc<std::sync::Mutex<Option<VerificationGate>>>,
     client: Client,
     stop: Arc<AtomicBool>,
     join: Option<thread::JoinHandle<()>>,
 }
 impl Client {
+    pub(crate) async fn enrollment(
+        &self,
+        endpoint: wire::Endpoint,
+        bytes: Vec<u8>,
+        deadline: Instant,
+    ) -> Result<Reply, Error> {
+        let (reply, rx) = oneshot::channel();
+        // Wait for the state owner, bounded by socket admission and the exchange
+        // timeout. Only crypto admission may return Busy after consuming finish.
+        self.tx
+            .send(Job {
+                command: Command::Enrollment(endpoint, bytes),
+                deadline,
+                reply,
+            })
+            .await
+            .map_err(|_| Error::Unavailable)?;
+        rx.await.map_err(|_| Error::Unavailable)?
+    }
+
     pub(crate) async fn request(
         &self,
         command: Command,
@@ -62,81 +95,297 @@ impl Worker {
         let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
         let stop = Arc::new(AtomicBool::new(false));
         let stopping = stop.clone();
-        let join = thread::Builder::new().name("wudo-storage".into()).spawn(move || {
-            let anchor = anchor;
-            if !same_directory(&path, anchor.as_ref()) { let _ = ready_tx.send(Err(())); return; }
-            let mut store = match std::fs::symlink_metadata(path.join("identity.sqlite3")) {
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    // Orphan sidecars are not a fresh installation.
-                    if ["-journal", "-wal", "-shm"].iter().any(|suffix| {
-                        !matches!(std::fs::symlink_metadata(path.join(format!("identity.sqlite3{suffix}"))), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
-                    }) { let _ = ready_tx.send(Err(())); return; }
-                    None
+        #[cfg(test)]
+        let gate = Arc::new(std::sync::Mutex::new(None::<VerificationGate>));
+        #[cfg(test)]
+        let thread_gate = gate.clone();
+        let completion_tx = tx.downgrade();
+        let join = thread::Builder::new()
+            .name("wudo-storage".into())
+            .spawn(move || {
+                if !same_directory(&path, anchor.as_ref()) {
+                    let _ = ready_tx.send(Err(()));
+                    return;
                 }
-                Ok(_) => match Store::open_for_upgrade(&path) { Ok(s) => Some(s), Err(_) => { let _ = ready_tx.send(Err(())); return; } },
-                Err(_) => { let _ = ready_tx.send(Err(())); return; }
-            };
-            let _ = ready_tx.send(Ok(()));
-            let mut failed = false;
-            while let Some(job) = rx.blocking_recv() {
-                if stopping.load(Ordering::Acquire) { break; }
-                if job.reply.is_closed() || Instant::now() >= job.deadline { continue; }
-                let result = if failed || !same_directory(&path, anchor.as_ref()) {
-                    failed = true; Err(Error::Unavailable) } else {
-                    match job.command {
-                        Command::Initialize if store.is_some() => Err(Error::Conflict),
-                        Command::Initialize => match Store::initialize(&path) {
-                            Ok(s) => { store = Some(s); Ok(Reply::Ready) },
-                            Err(_) => { failed = true; Err(Error::InternalError) },
-                        },
-                        Command::Upgrade if store.is_none() => Err(Error::Unavailable),
-                        Command::Upgrade => match Store::upgrade(&path) {
-                            Ok(s) => { store = Some(s); Ok(Reply::Ready) },
-                            Err(_) => { failed = true; Err(Error::InternalError) },
-                        },
-                        Command::Create(_, _) | Command::Inspect(_) if store.as_ref().is_some_and(|s| s.needs_upgrade().unwrap_or(true)) => Err(Error::Unavailable),
-                        Command::Create(name, label) => match store.as_mut() {
-                            Some(s) => s.create_user(&name, &label).map(Reply::User).map_err(map_error),
-                            None => Err(Error::Unavailable),
-                        },
-                        Command::Inspect(name) => match store.as_ref() {
-                            Some(s) => s.user_by_name(&name).map_err(map_error).and_then(|u| u.map(Reply::User).ok_or(Error::Unavailable)),
-                            None => Err(Error::Unavailable),
-                        },
+                let mut store = match open_store(&path) {
+                    Ok(s) => s,
+                    Err(()) => {
+                        let _ = ready_tx.send(Err(()));
+                        return;
                     }
                 };
-                if matches!(result, Err(Error::InternalError)) { failed = true; }
-                let _ = job.reply.send(result);
-            }
-        }).map_err(|_| ())?;
+                let mut enrollment = None;
+                let mut crypto: Vec<thread::JoinHandle<()>> = Vec::new();
+                let _ = ready_tx.send(Ok(()));
+                let mut failed = false;
+                while let Some(job) = rx.blocking_recv() {
+                    if stopping.load(Ordering::Acquire) {
+                        break;
+                    }
+                    let mut i = 0;
+                    while i < crypto.len() {
+                        if crypto[i].is_finished() {
+                            if crypto.swap_remove(i).join().is_err() {
+                                failed = true;
+                            }
+                        } else {
+                            i += 1;
+                        }
+                    }
+                    let completion = matches!(&job.command, Command::Completed(..));
+                    if !completion && (job.reply.is_closed() || Instant::now() >= job.deadline) {
+                        continue;
+                    }
+                    if failed || !same_directory(&path, anchor.as_ref()) {
+                        failed = true;
+                        let _ = job.reply.send(Err(Error::Unavailable));
+                        continue;
+                    }
+                    // Finish takes state before admission to a crypto thread. SQLite
+                    // and enrollment transitions remain on this single owner thread.
+                    if let Command::Enrollment(endpoint, ref bytes) = job.command {
+                        let preparation = (|| {
+                            let s = store.as_mut().ok_or(Error::Unavailable)?;
+                            if s.needs_upgrade().map_err(map_error)? {
+                                return Err(Error::Unavailable);
+                            }
+                            if enrollment.is_none() {
+                                enrollment = Some(Enrollment::new(s)?);
+                            }
+                            let engine = enrollment.as_mut().ok_or(Error::Unavailable)?;
+                            match wire::decode_request(bytes, endpoint)? {
+                                wire::Request::RegistrationFinish(v) => {
+                                    let task =
+                                        engine.take_finish(bytes, endpoint, Instant::now())?;
+                                    Ok(Some((task, v.ceremony_id)))
+                                }
+                                _ => Ok(None),
+                            }
+                        })();
+                        match preparation {
+                            Ok(Some((task, id))) => {
+                                if crypto.len() >= 2 {
+                                    if let Some(e) = enrollment.as_mut() {
+                                        e.abort_verification(id);
+                                    }
+                                    let _ = job.reply.send(Err(Error::Busy));
+                                    continue;
+                                }
+                                #[cfg(test)]
+                                let verification_gate =
+                                    thread_gate.lock().expect("test gate").take();
+                                let tx = completion_tx.clone();
+                                let bytes = bytes.clone();
+                                let result = thread::Builder::new()
+                                    .name("wudo-verifier".into())
+                                    .spawn(move || {
+                                        #[cfg(test)]
+                                        if let Some(gate) = verification_gate {
+                                            let _ = gate.started.send(());
+                                            let _ = gate.release.recv();
+                                        }
+                                        let verified = task.run();
+                                        if let Some(tx) = tx.upgrade() {
+                                            let _ = tx.blocking_send(Job {
+                                                command: Command::Completed(
+                                                    Box::new(verified),
+                                                    bytes,
+                                                ),
+                                                deadline: job.deadline,
+                                                reply: job.reply,
+                                            });
+                                        }
+                                    });
+                                match result {
+                                    Ok(handle) => crypto.push(handle),
+                                    Err(_) => {
+                                        if let Some(e) = enrollment.as_mut() {
+                                            e.abort_verification(id);
+                                        }
+                                    }
+                                }
+                                continue;
+                            }
+                            Err(error) => {
+                                if error == Error::InternalError {
+                                    failed = true;
+                                }
+                                let _ = job.reply.send(Err(error));
+                                continue;
+                            }
+                            Ok(None) => {}
+                        }
+                    }
+                    let result = dispatch(job.command, &path, &mut store, &mut enrollment);
+                    if matches!(result, Err(Error::InternalError)) {
+                        failed = true;
+                    }
+                    let _ = job.reply.send(result);
+                }
+                // Closing the bounded queue releases crypto senders before join.
+                // Late results never activate after shutdown.
+                drop(rx);
+                for handle in crypto {
+                    let _ = handle.join();
+                }
+            })
+            .map_err(|_| ())?;
         if ready_rx.recv().map_err(|_| ())?.is_err() {
             let _ = join.join();
             return Err(());
         }
         Ok(Self {
+            #[cfg(test)]
+            gate,
             client: Client { tx },
             stop,
             join: Some(join),
         })
     }
+    #[cfg(test)]
+    pub(crate) fn pause_next_verification(
+        &self,
+    ) -> (oneshot::Receiver<()>, std::sync::mpsc::SyncSender<()>) {
+        let (started, rx) = oneshot::channel();
+        let (release_tx, release) = std::sync::mpsc::sync_channel(0);
+        *self.gate.lock().expect("test gate") = Some(VerificationGate { started, release });
+        (rx, release_tx)
+    }
     pub(crate) fn client(&self) -> Client {
         self.client.clone()
     }
 }
-impl Drop for Worker {
-    fn drop(&mut self) {
+impl Worker {
+    pub(crate) fn shutdown(&self) {
         self.stop.store(true, Ordering::Release);
-        // Wake an idle worker without waiting for queue space.
         let (reply, _) = oneshot::channel();
         let _ = self.client.tx.try_send(Job {
             command: Command::Inspect(String::new()),
             deadline: Instant::now(),
             reply,
         });
+    }
+}
+impl Drop for Worker {
+    fn drop(&mut self) {
+        self.shutdown();
         if let Some(join) = self.join.take() {
             let _ = join.join();
         }
     }
+}
+fn open_store(path: &std::path::Path) -> Result<Option<Store>, ()> {
+    match std::fs::symlink_metadata(path.join("identity.sqlite3")) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let has_sidecar=["-journal","-wal","-shm"].iter().any(|suffix| {
+                !matches!(std::fs::symlink_metadata(path.join(format!("identity.sqlite3{suffix}"))),Err(e) if e.kind()==std::io::ErrorKind::NotFound)
+            });
+            if has_sidecar {
+                return Err(());
+            }
+            Ok(None)
+        }
+        Ok(_) => Store::open_for_upgrade(path).map(Some).map_err(|_| ()),
+        Err(_) => Err(()),
+    }
+}
+fn dispatch(
+    command: Command,
+    path: &std::path::Path,
+    store: &mut Option<Store>,
+    enrollment: &mut Option<Enrollment>,
+) -> Result<Reply, Error> {
+    match command {
+        Command::Initialize => {
+            if store.is_some() {
+                return Err(Error::Conflict);
+            }
+            *store = Some(Store::initialize(path).map_err(map_error)?);
+            Ok(Reply::Ready)
+        }
+        Command::Upgrade => {
+            if store.is_none() {
+                return Err(Error::Unavailable);
+            }
+            *store = Some(Store::upgrade(path).map_err(map_error)?);
+            Ok(Reply::Ready)
+        }
+        Command::Configure(origin) => configure(store, enrollment, path, &origin, false),
+        Command::Reset(origin) => configure(store, enrollment, path, &origin, true),
+        other => {
+            let s = store.as_mut().ok_or(Error::Unavailable)?;
+            if s.needs_upgrade().map_err(map_error)? {
+                return Err(Error::Unavailable);
+            }
+            match other {
+                Command::Create(name, label) => s
+                    .create_user(&name, &label)
+                    .map(Reply::User)
+                    .map_err(map_error),
+                Command::Inspect(name) => s
+                    .user_by_name(&name)
+                    .map_err(map_error)?
+                    .map(Reply::User)
+                    .ok_or(Error::Unavailable),
+                Command::Enrollment(endpoint, bytes) => enrollment
+                    .as_mut()
+                    .ok_or(Error::Unavailable)?
+                    .request(&bytes, endpoint, s, Instant::now())
+                    .map(Reply::Encoded),
+                Command::Completed(verified, bytes) => {
+                    let state = enrollment.as_mut().ok_or(Error::Unavailable)?.complete(
+                        *verified,
+                        s,
+                        Instant::now(),
+                    )?;
+                    let request = wire::decode_request(&bytes, wire::Endpoint::Web)?;
+                    let mut out = vec![0; 4096];
+                    let n = wire::encode_response(
+                        &mut out,
+                        &wire::Response::Registered(wire::Registered { state }),
+                        &request,
+                        wire::Endpoint::Web,
+                    )
+                    .map_err(|_| Error::InternalError)?;
+                    out.truncate(n);
+                    Ok(Reply::Encoded(out))
+                }
+                _ => Err(Error::UnsupportedOperation),
+            }
+        }
+    }
+}
+fn configure(
+    store: &mut Option<Store>,
+    enrollment: &mut Option<Enrollment>,
+    path: &std::path::Path,
+    origin: &str,
+    reset: bool,
+) -> Result<Reply, Error> {
+    wire::InstallationOrigin::parse(origin)?;
+    if store
+        .as_ref()
+        .is_some_and(|s| s.needs_upgrade().unwrap_or(true))
+    {
+        return Err(Error::Unavailable);
+    }
+    if reset && let Some(e) = enrollment.as_mut() {
+        e.invalidate();
+    }
+    if store.is_none() {
+        *store = Some(Store::initialize(path).map_err(map_error)?);
+    }
+    let s = store.as_mut().ok_or(Error::Unavailable)?;
+    if reset {
+        s.reset_installation(origin)
+    } else {
+        s.configure_installation(origin)
+    }
+    .map_err(map_error)?;
+    if let Some(e) = enrollment.as_mut() {
+        e.reload(s)?;
+    }
+    Ok(Reply::Ready)
 }
 fn map_error(error: wudo_store::Error) -> Error {
     match error {

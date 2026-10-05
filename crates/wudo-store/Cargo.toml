@@ -16,6 +16,8 @@ rustix = { version = "1", default-features = false, features = ["process", "std"
 webauthn-rs = { version = "=0.5.5", default-features = false }
 serde_json = "1"
 
+wudo-protocol = { path = "../wudo-protocol", features = ["v2"] }
+
 [dev-dependencies]
 tempfile = "3"
 webauthn-authenticator-rs = { version = "=0.5.5", default-features = false, features = ["softpasskey"] }

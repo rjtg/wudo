@@ -59,7 +59,7 @@ fn v1_requires_explicit_upgrade_and_preserves_users() {
     assert!(!store.needs_upgrade().unwrap());
     assert!(store.user_by_name("alice").unwrap().is_some());
     drop(store);
-    assert_eq!(Store::schema_version(dir.path()).unwrap(), 2);
+    assert_eq!(Store::schema_version(dir.path()).unwrap(), 3);
     assert!(Store::upgrade(dir.path()).is_ok());
 }
 #[test]
@@ -71,6 +71,11 @@ fn verified_credential_survives_restart_and_revocation_is_terminal() {
     let other = store.create_user("bob", "Bob").unwrap();
     let (mut client, key) = credential(&server, user.id);
     store.activate_credential(user.id, &key).unwrap();
+    assert!(matches!(
+        store.configure_installation("https://wudo.example.test"),
+        Err(Error::Conflict)
+    ));
+
     assert!(matches!(
         store.activate_credential(other.id, &key),
         Err(Error::Conflict)
@@ -216,4 +221,35 @@ fn retained_revocations_count_toward_global_capacity() {
         store.activate_credential(user.id, &extra),
         Err(Error::Capacity)
     ));
+}
+
+#[test]
+fn explicit_reset_removes_active_and_revoked_credentials() {
+    let dir = directory();
+    let mut store = Store::initialize(dir.path()).unwrap();
+    store
+        .configure_installation("https://wudo.example.test")
+        .unwrap();
+    let user = store.create_user("alice", "Alice").unwrap();
+    let (_, active) = credential(&verifier(), user.id);
+    let (_, revoked) = credential(&verifier(), user.id);
+    store.activate_credential(user.id, &active).unwrap();
+    store.activate_credential(user.id, &revoked).unwrap();
+    store.revoke_credential(revoked.cred_id().as_ref()).unwrap();
+    store
+        .reset_installation("https://new.example.test")
+        .unwrap();
+    drop(store);
+    let store = Store::open(dir.path()).unwrap();
+    assert!(store.user_by_id(user.id).unwrap().is_none());
+    assert!(
+        !store
+            .credential_id_exists(active.cred_id().as_ref())
+            .unwrap()
+    );
+    assert!(
+        !store
+            .credential_id_exists(revoked.cred_id().as_ref())
+            .unwrap()
+    );
 }

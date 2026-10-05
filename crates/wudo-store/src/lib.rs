@@ -3,6 +3,7 @@
 //! The caller must keep the directory and its ancestors stable and trusted for
 //! the store lifetime. No daemon integration or network-selected paths.
 mod credentials;
+mod installation;
 pub use credentials::{MAX_ACTIVE_CREDENTIALS, MAX_CREDENTIALS, RECORD_FORMAT};
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
@@ -15,11 +16,12 @@ use std::{
 
 pub const MAX_USERS: usize = 64;
 const APP_ID: i64 = 0x5755444f;
-pub const SCHEMA_VERSION: usize = 2;
+pub const SCHEMA_VERSION: usize = 3;
 fn migrations() -> rusqlite_migration::Migrations<'static> {
     rusqlite_migration::Migrations::new(vec![
         rusqlite_migration::M::up(include_str!("../migrations/001_users.sql")),
         rusqlite_migration::M::up(include_str!("../migrations/002_credentials.sql")),
+        rusqlite_migration::M::up(include_str!("../migrations/003_installation.sql")),
     ])
 }
 const MAX_DB: u64 = 4 * 1024 * 1024;
@@ -283,8 +285,11 @@ impl Store {
         if count > MAX_USERS {
             return Err(Error::InvalidStore);
         }
-        if version == 2 {
+        if version >= 2 {
             self.validate_credentials()?;
+        }
+        if version >= 3 {
+            self.validate_installation()?;
         }
         Ok(())
     }

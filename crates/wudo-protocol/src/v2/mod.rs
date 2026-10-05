@@ -2,7 +2,9 @@
 //! No handlers, storage, random generation, WebAuthn verification or execution.
 //! Encoders validate their output; on error the caller must discard the buffer.
 mod bounded;
+mod origin;
 mod types;
+pub use origin::{InstallationOrigin, MAX_ORIGIN};
 pub use types::*;
 
 use minicbor::{Decoder, Encoder, encode::write::Cursor};
@@ -160,6 +162,8 @@ fn checked(bytes: &[u8]) -> Result<Fields<'_>> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Operation {
     Status,
+    InstallationInitialize,
+    InstallationReset,
     StoreInitialize,
     StoreUpgrade,
     UserInspect,
@@ -178,7 +182,9 @@ impl Operation {
     pub fn allowed(self, endpoint: Endpoint) -> bool {
         match self {
             Self::Status => true,
-            Self::StoreInitialize
+            Self::InstallationReset
+            | Self::InstallationInitialize
+            | Self::StoreInitialize
             | Self::StoreUpgrade
             | Self::UserInspect
             | Self::UserCreate
@@ -208,6 +214,8 @@ impl Operation {
         match self {
             Self::Status => "status",
             Self::StoreInitialize => "store.initialize",
+            Self::InstallationInitialize => "installation.initialize",
+            Self::InstallationReset => "installation.reset",
             Self::StoreUpgrade => "store.upgrade",
             Self::UserInspect => "user.inspect",
             Self::UserCreate => "user.create",
@@ -226,6 +234,8 @@ impl Operation {
         [
             Self::Status,
             Self::StoreInitialize,
+            Self::InstallationInitialize,
+            Self::InstallationReset,
             Self::StoreUpgrade,
             Self::UserInspect,
             Self::UserCreate,
@@ -250,6 +260,8 @@ impl Operation {
 #[derive(Clone, PartialEq, Eq)]
 pub enum Request<'a> {
     Status,
+    InstallationInitialize(InstallationInitialize<'a>),
+    InstallationReset(InstallationInitialize<'a>),
     StoreInitialize,
     StoreUpgrade,
     UserInspect(UserInspect<'a>),
@@ -269,6 +281,8 @@ impl Request<'_> {
         match self {
             Self::Status => Operation::Status,
             Self::StoreInitialize => Operation::StoreInitialize,
+            Self::InstallationInitialize(_) => Operation::InstallationInitialize,
+            Self::InstallationReset(_) => Operation::InstallationReset,
             Self::StoreUpgrade => Operation::StoreUpgrade,
             Self::UserInspect(_) => Operation::UserInspect,
             Self::UserCreate(_) => Operation::UserCreate,
@@ -317,6 +331,12 @@ pub fn decode_request(bytes: &[u8], endpoint: Endpoint) -> Result<Request<'_>> {
                 Request::StoreUpgrade
             }
         }
+        Operation::InstallationReset => {
+            Request::InstallationReset(InstallationInitialize::read(body)?)
+        }
+        Operation::InstallationInitialize => {
+            Request::InstallationInitialize(InstallationInitialize::read(body)?)
+        }
         Operation::UserInspect => Request::UserInspect(UserInspect::read(body)?),
         Operation::UserCreate => Request::UserCreate(UserCreate::read(body)?),
         Operation::EnrollmentOpen => Request::EnrollmentOpen(EnrollmentOpen::read(body)?),
@@ -335,6 +355,9 @@ pub fn decode_request(bytes: &[u8], endpoint: Endpoint) -> Result<Request<'_>> {
         Operation::ActionFinish => Request::ActionFinish(ActionFinish::read(body)?),
     };
     match &request {
+        Request::InstallationInitialize(v) | Request::InstallationReset(v) => {
+            InstallationOrigin::parse(v.origin.0)?;
+        }
         Request::RegistrationFinish(v) => {
             bounded::client_data(v.client_data.0, true)?;
             bounded::attestation(v.attestation_object.0)?;
@@ -362,6 +385,7 @@ pub fn encode_request(out: &mut [u8], request: &Request<'_>, endpoint: Endpoint)
         | Request::RegistrationBeginInsecure => {
             e.map(0)?;
         }
+        Request::InstallationInitialize(v) | Request::InstallationReset(v) => v.write(&mut e)?,
         Request::UserInspect(v) => v.write(&mut e)?,
         Request::UserCreate(v) => v.write(&mut e)?,
         Request::EnrollmentOpen(v) => v.write(&mut e)?,
@@ -455,9 +479,10 @@ pub fn decode_response<'a>(
     envelope.finish()?;
     let response = match request {
         Request::Status => Response::Status(StatusResult::read(body)?),
-        Request::StoreInitialize | Request::StoreUpgrade => {
-            Response::StoreReady(StoreReady::read(body)?)
-        }
+        Request::StoreInitialize
+        | Request::StoreUpgrade
+        | Request::InstallationInitialize(_)
+        | Request::InstallationReset(_) => Response::StoreReady(StoreReady::read(body)?),
         Request::UserInspect(_) => Response::UserInfo(UserInfo::read(body)?),
         Request::UserCreate(_) => Response::UserCreated(UserCreated::read(body)?),
         Request::EnrollmentOpen(request) => {

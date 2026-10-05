@@ -189,7 +189,8 @@ that skips candidate approval and activates the first valid registration for the
 root-selected user in a bounded one-enrollment window. It does not bypass
 WebAuthn verification or create grants. Relay-driven enrollment takeover is an
 accepted risk for this opt-in mode; see SECURITY.md and the ceremony proposal.
-This option is not yet implemented; exact wire/state semantics remain under review.
+The daemon and local CLI implement this option under the reviewed wire/state
+contract; browser UI and real-device validation remain pending.
 
 Store only public credential material and metadata. Never store the passkey private key or biometric information.
 

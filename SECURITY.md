@@ -153,8 +153,12 @@ and an RP ID matching its hostname in trusted daemon configuration. No deploymen
 hostname is hardcoded. `wudod` verifies against these settings, never values
 selected by the browser, relay or Host/Forwarded headers. Scheme, hostname and
 effective port must match; wildcard/subdomain/any-port acceptance is excluded.
-Changing the RP ID can require passkey re-enrollment. Concrete configuration
-syntax and migration handling remain to be specified before implementation.
+Changing the RP ID can require passkey re-enrollment. The address is stored by root-only `wudo init --origin`, with RP ID derived
+from its hostname. Normal init never replaces settings. Explicit confirmed
+`wudo init --reset` replaces the stored identity/settings transactionally, clears
+pending ceremonies and prevents late verification from crossing the reset.
+External action files, LUKS keyslots and recovery passphrases are untouched.
+See docs/installation-setup.md for confirmation and historical-store rules.
 
 ## Conditional secret use
 
@@ -188,7 +192,7 @@ For the LUKS use case:
 
 ## Explicit insecure enrollment option
 
-Accepted design, not yet implemented: local root may start a short-lived,
+Implemented enrollment policy: local root may start a short-lived,
 one-enrollment opportunity with `wudo enroll --insecure`. It activates the first
 valid WebAuthn registration for the root-selected user without independent
 credential identification or a second local approval. A compromised relay or
@@ -204,7 +208,8 @@ provided by the same compromised UI does not establish that assurance.
 WebAuthn verification remains mandatory. The web client cannot select the target
 user, grant permissions, or open/extend the window. Expiry, cancellation, restart
 or successful activation closes it. Credential enrollment does not automatically
-provision secret wrappers. Exact wire/state mechanics remain under #12 review.
+provision secret wrappers. The wire/state mechanics are implemented; real browser compatibility and
+production recovery workflows remain under #12.
 
 ## Revocation semantics
 

@@ -440,4 +440,13 @@ registration IDs with the outer wire ID, and preserve the strict rejection of
 upstream-generated `tokenBinding:null` unless a future review changes the profile.
 The positive fixture signs compliant client data from the outset; it never strips
 fields from already signed bytes. Additional inner authenticator-data checks are deferred; actual browser
-compatibility remains to be validated before enabling enrollment.
+compatibility remains to be validated before production rollout.
+
+## Runtime status
+
+Enrollment/registration handlers and their local administrative CLI are now
+implemented; see [runtime ordering and validation](enrollment-implementation.md).
+The daemon uses the same typed projection exercised by synthetic signed IPC
+fixtures. Browser UI and real-device compatibility remain pending. Additional
+root-only initialization/reset operations and their wire contracts are recorded
+in [installation setup](installation-setup.md); action handlers remain disabled.
