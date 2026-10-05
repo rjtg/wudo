@@ -549,3 +549,55 @@ fn opportunities_reserve_global_credential_capacity() {
     .unwrap();
     assert!(call(&mut engine, &mut store, &req, wire::Endpoint::Admin, now).is_ok());
 }
+
+#[test]
+fn retained_revocation_blocks_late_verification_and_candidate_approval() {
+    for pending_approval in [false, true] {
+        let (_dir, mut s, mut e) = setup();
+        let now = Instant::now();
+        let mode = if pending_approval {
+            wire::Mode::Confirm
+        } else {
+            wire::Mode::Insecure
+        };
+        let (enrollment_id, begin, user) = open(&mut e, &mut s, "alice", mode, now);
+        let (payload, id) = finish(&mut e, &mut s, &begin, now, true, ORIGIN);
+        let verified = e
+            .take_finish(&payload, wire::Endpoint::Web, now)
+            .unwrap()
+            .run();
+        let key = verified.result.as_ref().unwrap().clone();
+        if pending_approval {
+            e.complete(verified, &mut s, now).unwrap();
+            let inspect = wire::Request::EnrollmentInspect(wire::EnrollmentRef { enrollment_id });
+            let reply = call(&mut e, &mut s, &inspect, wire::Endpoint::Admin, now).unwrap();
+            let wire::Response::CandidateInspection(candidate) =
+                wire::decode_response(&reply, &inspect, wire::Endpoint::Admin).unwrap()
+            else {
+                panic!("candidate");
+            };
+            // Model a competing durable writer before approval. Retaining the ID
+            // must prevent the verified snapshot from reactivating it.
+            s.activate_credential(user, &key).unwrap();
+            s.revoke_owned_credential(user, &id).unwrap().unwrap();
+            let approve = wire::Request::EnrollmentApprove(wire::EnrollmentApprove {
+                enrollment_id,
+                candidate_id: candidate.candidate_id,
+            });
+            assert!(call(&mut e, &mut s, &approve, wire::Endpoint::Admin, now).is_err());
+        } else {
+            s.activate_credential(user, &key).unwrap();
+            s.revoke_owned_credential(user, &id).unwrap().unwrap();
+            assert!(matches!(
+                e.complete(verified, &mut s, now),
+                Err(Error::Unavailable)
+            ));
+        }
+        assert!(s.inspect_credential(user, &id).unwrap().unwrap().revoked);
+        assert!(
+            s.credential_for_authentication(user, &id)
+                .unwrap()
+                .is_none()
+        );
+    }
+}

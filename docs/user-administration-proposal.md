@@ -16,11 +16,14 @@ daemon's kernel UID before sending a request. No command accepts a database path
 | `sudo wudo user create NAME --label LABEL` | `user.create` (existing) | `{name:Name,label:Label}` | `{user_id:UserId}` (existing) |
 | `sudo wudo user show NAME` | `user.inspect` (new) | `{name:Name}` | `{user_id:UserId,name:Name,label:Label}` |
 
-Use existing typed name/label/UUID limits and strict CBOR v2 envelopes. All administrative
-operations have 4096-byte request/response caps. The web endpoint denies all
+Use existing typed name/label/UUID limits and strict CBOR v2 envelopes. The administrative
+operations in the table above have 4096-byte request/response caps. The web endpoint denies all
 these administrative operations before dispatch. Enrollment and explicit installation reset are now available as described in
 [enrollment](enrollment-implementation.md) and [setup](installation-setup.md).
-Targeted user mutation, credential inspection/revocation and grants remain later work.
+User listing and credential inspection/revocation are now available under the
+[credential administration contract](credential-administration-proposal.md),
+including bounded list-response exceptions. Targeted user mutation and grants
+remain later work.
 
 Creation prints the UUID; inspection prints the UUID, name and label with
 unambiguous escaping for terminal output. Neither says the user is enrolled or

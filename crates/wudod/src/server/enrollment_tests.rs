@@ -304,3 +304,150 @@ fn shutdown_discards_late_verification_but_lost_reply_alone_does_not() {
         assert_eq!(store.credential_id_exists(&key).unwrap(), !shutdown);
     }
 }
+
+#[test]
+fn credential_administration_is_owner_bound_durable_and_admin_only() {
+    let (dir, worker) = setup();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (user, key) = rt.block_on(async {
+        let c = worker.client();
+        init(c.clone()).await;
+        let (_, begin, user) = open(c.clone(), v::Mode::Insecure).await;
+        let (payload, key) = signed_finish(c.clone(), &begin).await;
+        let req = v::decode_request(&payload, v::Endpoint::Web).unwrap();
+        let reply = raw(c.clone(), v::Endpoint::Web, payload.clone()).await;
+        assert!(matches!(
+            v::decode_response(&reply, &req, v::Endpoint::Web).unwrap(),
+            v::Response::Registered(v::Registered {
+                state: v::RegistrationState::Active
+            })
+        ));
+        // A separately authorized enrollment window survives targeted revocation.
+        let q = v::Request::EnrollmentOpen(v::EnrollmentOpen {
+            user_id: user,
+            mode: v::Mode::Insecure,
+        });
+        let reply = call(c.clone(), &q, v::Endpoint::Admin).await;
+        assert!(matches!(
+            v::decode_response(&reply, &q, v::Endpoint::Admin).unwrap(),
+            v::Response::Opened(_)
+        ));
+        let queries = [
+            v::Request::UserList(v::UserList { after: None }),
+            v::Request::CredentialList(v::CredentialQuery {
+                user_id: user,
+                after: None,
+            }),
+            v::Request::CredentialInspect(v::CredentialRef {
+                user_id: user,
+                credential_id: v::Blob(&key),
+            }),
+            v::Request::CredentialRevoke(v::CredentialRef {
+                user_id: user,
+                credential_id: v::Blob(&key),
+            }),
+        ];
+        for q in &queries {
+            let reply = raw(c.clone(), v::Endpoint::Web, encode(q, v::Endpoint::Admin)).await;
+            assert!(matches!(
+                v::decode_response(&reply, &v::Request::Status, v::Endpoint::Web).unwrap(),
+                v::Response::Error(v::Error::NotPermitted)
+            ));
+        }
+        for q in &queries[..3] {
+            let reply = call(c.clone(), q, v::Endpoint::Admin).await;
+            match v::decode_response(&reply, q, v::Endpoint::Admin).unwrap() {
+                v::Response::UserPage(p) => assert_eq!(p.users.0.len(), 1),
+                v::Response::CredentialPage(p) => {
+                    assert_eq!(p.credentials.0.len(), 1);
+                    assert_eq!(p.credentials.0[0].state, v::CredentialState::Active);
+                }
+                v::Response::CredentialInfo(p) => {
+                    assert_eq!(p.state, v::CredentialState::Active);
+                    assert_eq!(p.fingerprint.0, openssl::sha::sha256(&key));
+                }
+                _ => panic!("administrative projection"),
+            }
+        }
+        let mut other = user;
+        other.0[15] ^= 1;
+        for q in [
+            v::Request::CredentialList(v::CredentialQuery {
+                user_id: other,
+                after: None,
+            }),
+            v::Request::CredentialInspect(v::CredentialRef {
+                user_id: other,
+                credential_id: v::Blob(&key),
+            }),
+            v::Request::CredentialRevoke(v::CredentialRef {
+                user_id: other,
+                credential_id: v::Blob(&key),
+            }),
+        ] {
+            let reply = call(c.clone(), &q, v::Endpoint::Admin).await;
+            assert!(matches!(
+                v::decode_response(&reply, &q, v::Endpoint::Admin).unwrap(),
+                v::Response::Error(v::Error::Unavailable)
+            ));
+        }
+        for _ in 0..2 {
+            let q = &queries[3];
+            let reply = call(c.clone(), q, v::Endpoint::Admin).await;
+            assert!(matches!(
+                v::decode_response(&reply, q, v::Endpoint::Admin).unwrap(),
+                v::Response::CredentialRevoked(_)
+            ));
+        }
+        // Fresh registration in the pre-existing window still activates another ID.
+        let (payload, second) =
+            signed_finish(c.clone(), &v::Request::RegistrationBeginInsecure).await;
+        assert_ne!(key, second);
+        let req = v::decode_request(&payload, v::Endpoint::Web).unwrap();
+        let reply = raw(c.clone(), v::Endpoint::Web, payload.clone()).await;
+        assert!(matches!(
+            v::decode_response(&reply, &req, v::Endpoint::Web).unwrap(),
+            v::Response::Registered(v::Registered {
+                state: v::RegistrationState::Active
+            })
+        ));
+        (user, key)
+    });
+    drop(worker);
+    let worker = Worker::start(dir.path().into(), None).unwrap();
+    rt.block_on(async {
+        let q = v::Request::CredentialInspect(v::CredentialRef {
+            user_id: user,
+            credential_id: v::Blob(&key),
+        });
+        let reply = call(worker.client(), &q, v::Endpoint::Admin).await;
+        assert!(matches!(
+            v::decode_response(&reply, &q, v::Endpoint::Admin).unwrap(),
+            v::Response::CredentialInfo(v::CredentialInfo {
+                state: v::CredentialState::Revoked,
+                ..
+            })
+        ));
+        let reset = v::Request::InstallationReset(v::InstallationInitialize {
+            origin: v::Text(ORIGIN),
+        });
+        call(worker.client(), &reset, v::Endpoint::Admin).await;
+        let create = v::Request::UserCreate(v::UserCreate {
+            name: v::Name("alice"),
+            label: v::Label("New Alice"),
+        });
+        call(worker.client(), &create, v::Endpoint::Admin).await;
+        let revoke = v::Request::CredentialRevoke(v::CredentialRef {
+            user_id: user,
+            credential_id: v::Blob(&key),
+        });
+        let reply = call(worker.client(), &revoke, v::Endpoint::Admin).await;
+        assert!(matches!(
+            v::decode_response(&reply, &revoke, v::Endpoint::Admin).unwrap(),
+            v::Response::Error(v::Error::Unavailable)
+        ));
+    });
+}

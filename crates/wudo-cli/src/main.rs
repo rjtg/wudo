@@ -1,4 +1,5 @@
 mod admin;
+mod credentials;
 mod enrollment;
 mod status;
 
@@ -10,6 +11,9 @@ fn main() -> ExitCode {
     // Consume a fixed number of arguments rather than collecting arbitrary input.
     let mut args = env::args_os().skip(1);
     let command = args.next();
+    if command.as_deref() == Some(std::ffi::OsStr::new("credential")) {
+        return credentials::run(args);
+    }
     if command.as_deref() == Some(std::ffi::OsStr::new("enroll")) {
         return enrollment::run(args);
     }

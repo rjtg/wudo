@@ -98,8 +98,11 @@ still complete registration through the web-runtime IPC operations. `wudo-web`
 and the Rust/WASM browser UI are not yet implemented, so these commands alone
 do not provide a complete browser enrollment experience.
 
-Durable credential inspection/targeted revocation and lost-reply recovery remain
-production rollout prerequisites. Real browser/authenticator/ARM validation,
+Durable credential listing, inspection and targeted revocation are now available
+through the [administration CLI](credential-administration-proposal.md). After a
+lost activation reply, list the user's credentials and inspect the exact known
+ID; do not blindly open another enrollment. Inspection shows durable state, not
+proof of human ownership. Real browser/authenticator/ARM validation,
 PRF, action authorization and privileged action execution remain separate work.
 
 ## Validation

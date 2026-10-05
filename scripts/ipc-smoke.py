@@ -111,6 +111,16 @@ def isolated(original_namespace):
                     check_cli(result, "administrative CLI " + args[0])
             result = subprocess.run([str(CLI), "user", "show", "alice"], capture_output=True, text=True, timeout=6)
             check(result.returncode == 0 and "Alice" in result.stdout, "persistent user inspection")
+            result = subprocess.run([str(CLI), "user", "list"], capture_output=True, text=True, timeout=6)
+            check_cli(result, "local user listing")
+            check("alice" in result.stdout and "Alice" in result.stdout, "listing includes user without credentials")
+            result = subprocess.run([str(CLI), "credential", "list", "alice"], capture_output=True, text=True, timeout=6)
+            check_cli(result, "local credential listing")
+            check("No credentials on this page." in result.stdout, "empty credential page")
+            for action in ["show", "revoke"]:
+                result = subprocess.run([str(CLI), "credential", action, "alice", "00"], capture_output=True, text=True, timeout=6)
+                check(result.returncode == 1 and "Unavailable" in result.stderr,
+                      "missing credential " + action + " fails closed")
             for flags in [[], ["--insecure"]]:
                 opened = subprocess.run([str(CLI), "enroll", "alice", *flags], capture_output=True, text=True, timeout=6)
                 check_cli(opened, "local enrollment open")

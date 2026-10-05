@@ -1,6 +1,7 @@
 //! Opt-in v2 codec. Decoded messages are unverified input, never authorization.
 //! No handlers, storage, random generation, WebAuthn verification or execution.
 //! Encoders validate their output; on error the caller must discard the buffer.
+mod administration;
 mod bounded;
 mod origin;
 mod types;
@@ -166,6 +167,10 @@ pub enum Operation {
     InstallationReset,
     StoreInitialize,
     StoreUpgrade,
+    UserList,
+    CredentialList,
+    CredentialInspect,
+    CredentialRevoke,
     UserInspect,
     UserCreate,
     EnrollmentOpen,
@@ -186,6 +191,10 @@ impl Operation {
             | Self::InstallationInitialize
             | Self::StoreInitialize
             | Self::StoreUpgrade
+            | Self::UserList
+            | Self::CredentialList
+            | Self::CredentialInspect
+            | Self::CredentialRevoke
             | Self::UserInspect
             | Self::UserCreate
             | Self::EnrollmentOpen
@@ -204,6 +213,8 @@ impl Operation {
     }
     pub fn response_limit(self) -> usize {
         match self {
+            Self::UserList => 8192,
+            Self::CredentialList => 32768,
             Self::RegistrationBegin | Self::RegistrationBeginInsecure | Self::ActionBegin => {
                 MAX_PAYLOAD
             }
@@ -217,6 +228,10 @@ impl Operation {
             Self::InstallationInitialize => "installation.initialize",
             Self::InstallationReset => "installation.reset",
             Self::StoreUpgrade => "store.upgrade",
+            Self::UserList => "user.list",
+            Self::CredentialList => "credential.list",
+            Self::CredentialInspect => "credential.inspect",
+            Self::CredentialRevoke => "credential.revoke",
             Self::UserInspect => "user.inspect",
             Self::UserCreate => "user.create",
             Self::EnrollmentOpen => "enrollment.open",
@@ -237,6 +252,10 @@ impl Operation {
             Self::InstallationInitialize,
             Self::InstallationReset,
             Self::StoreUpgrade,
+            Self::UserList,
+            Self::CredentialList,
+            Self::CredentialInspect,
+            Self::CredentialRevoke,
             Self::UserInspect,
             Self::UserCreate,
             Self::EnrollmentOpen,
@@ -264,6 +283,10 @@ pub enum Request<'a> {
     InstallationReset(InstallationInitialize<'a>),
     StoreInitialize,
     StoreUpgrade,
+    UserList(UserList<'a>),
+    CredentialList(CredentialQuery<'a>),
+    CredentialInspect(CredentialRef<'a>),
+    CredentialRevoke(CredentialRef<'a>),
     UserInspect(UserInspect<'a>),
     UserCreate(UserCreate<'a>),
     EnrollmentOpen(EnrollmentOpen),
@@ -284,6 +307,10 @@ impl Request<'_> {
             Self::InstallationInitialize(_) => Operation::InstallationInitialize,
             Self::InstallationReset(_) => Operation::InstallationReset,
             Self::StoreUpgrade => Operation::StoreUpgrade,
+            Self::UserList(_) => Operation::UserList,
+            Self::CredentialList(_) => Operation::CredentialList,
+            Self::CredentialInspect(_) => Operation::CredentialInspect,
+            Self::CredentialRevoke(_) => Operation::CredentialRevoke,
             Self::UserInspect(_) => Operation::UserInspect,
             Self::UserCreate(_) => Operation::UserCreate,
             Self::EnrollmentOpen(_) => Operation::EnrollmentOpen,
@@ -337,6 +364,10 @@ pub fn decode_request(bytes: &[u8], endpoint: Endpoint) -> Result<Request<'_>> {
         Operation::InstallationInitialize => {
             Request::InstallationInitialize(InstallationInitialize::read(body)?)
         }
+        Operation::UserList => Request::UserList(UserList::read(body)?),
+        Operation::CredentialList => Request::CredentialList(CredentialQuery::read(body)?),
+        Operation::CredentialInspect => Request::CredentialInspect(CredentialRef::read(body)?),
+        Operation::CredentialRevoke => Request::CredentialRevoke(CredentialRef::read(body)?),
         Operation::UserInspect => Request::UserInspect(UserInspect::read(body)?),
         Operation::UserCreate => Request::UserCreate(UserCreate::read(body)?),
         Operation::EnrollmentOpen => Request::EnrollmentOpen(EnrollmentOpen::read(body)?),
@@ -386,6 +417,10 @@ pub fn encode_request(out: &mut [u8], request: &Request<'_>, endpoint: Endpoint)
             e.map(0)?;
         }
         Request::InstallationInitialize(v) | Request::InstallationReset(v) => v.write(&mut e)?,
+        Request::UserList(v) => v.write(&mut e)?,
+        Request::CredentialList(v) => v.write(&mut e)?,
+        Request::CredentialInspect(v) => v.write(&mut e)?,
+        Request::CredentialRevoke(v) => v.write(&mut e)?,
         Request::UserInspect(v) => v.write(&mut e)?,
         Request::UserCreate(v) => v.write(&mut e)?,
         Request::EnrollmentOpen(v) => v.write(&mut e)?,
@@ -405,6 +440,10 @@ pub fn encode_request(out: &mut [u8], request: &Request<'_>, endpoint: Endpoint)
 pub enum Response<'a> {
     Status(StatusResult),
     StoreReady(StoreReady),
+    UserPage(UserPage<'a>),
+    CredentialPage(CredentialPage<'a>),
+    CredentialInfo(CredentialInfo<'a>),
+    CredentialRevoked(CredentialRevoked<'a>),
     UserInfo(UserInfo<'a>),
     UserCreated(UserCreated),
     Opened(Opened),
@@ -483,6 +522,10 @@ pub fn decode_response<'a>(
         | Request::StoreUpgrade
         | Request::InstallationInitialize(_)
         | Request::InstallationReset(_) => Response::StoreReady(StoreReady::read(body)?),
+        Request::UserList(_)
+        | Request::CredentialList(_)
+        | Request::CredentialInspect(_)
+        | Request::CredentialRevoke(_) => administration::response(body, request)?,
         Request::UserInspect(_) => Response::UserInfo(UserInfo::read(body)?),
         Request::UserCreate(_) => Response::UserCreated(UserCreated::read(body)?),
         Request::EnrollmentOpen(request) => {
@@ -551,6 +594,10 @@ pub fn encode_response(
         match response {
             Response::Status(v) => v.write(&mut e)?,
             Response::StoreReady(v) => v.write(&mut e)?,
+            Response::UserPage(v) => v.write(&mut e)?,
+            Response::CredentialPage(v) => v.write(&mut e)?,
+            Response::CredentialInfo(v) => v.write(&mut e)?,
+            Response::CredentialRevoked(v) => v.write(&mut e)?,
             Response::UserInfo(v) => v.write(&mut e)?,
             Response::UserCreated(v) => v.write(&mut e)?,
             Response::Opened(v) => v.write(&mut e)?,

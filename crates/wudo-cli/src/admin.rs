@@ -100,6 +100,8 @@ pub(super) fn run(command: &str, args: impl Iterator<Item = OsString>) -> ExitCo
             name: Name(name),
             label: Label(label),
         }),
+        ("user", ["list"]) => return crate::credentials::list_users(None),
+        ("user", ["list", "--after", name]) => return crate::credentials::list_users(Some(name)),
         ("user", ["show", name]) => Request::UserInspect(UserInspect { name: Name(name) }),
         _ => return usage(),
     };
@@ -189,7 +191,7 @@ fn read_origin(mut reader: impl Read) -> std::result::Result<String, ()> {
 }
 fn usage() -> ExitCode {
     eprintln!(
-        "Usage: wudo init [--origin HTTPS_ORIGIN] [--reset [--yes]] | wudo upgrade | wudo user create NAME --label LABEL | wudo user show NAME"
+        "Usage: wudo init [--origin HTTPS_ORIGIN] [--reset [--yes]] | wudo upgrade | wudo user create NAME --label LABEL | wudo user show NAME | wudo user list [--after NAME]"
     );
     ExitCode::from(2)
 }
@@ -221,7 +223,14 @@ async fn exchange(
     stream.shutdown().await.map_err(|_| ())?;
     let mut header = [0; 4];
     stream.read_exact(&mut header).await.map_err(|_| ())?;
-    let n = wudo_protocol::payload_len(header).map_err(|_| ())?;
+    let n = wudo_protocol::v2::payload_len(header).map_err(|_| ())?;
+    let limit = decode_request(request, Endpoint::Admin)
+        .map_err(|_| ())?
+        .operation()
+        .response_limit();
+    if n > limit {
+        return Err(());
+    }
     let mut reply = vec![0; n];
     stream.read_exact(&mut reply).await.map_err(|_| ())?;
     let mut extra = [0];
@@ -234,6 +243,70 @@ async fn exchange(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn administrative_transport_accepts_large_pages_and_rejects_operation_overflow() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let mut id = [0; 16];
+            id[6] = 0x40;
+            id[8] = 0x80;
+            let user_id = UserId(id);
+            let q = Request::CredentialList(CredentialQuery {
+                user_id,
+                after: None,
+            });
+            let ids: Vec<_> = (1..=16).map(|n| vec![n; 1023]).collect();
+            let response = Response::CredentialPage(CredentialPage {
+                user_id,
+                credentials: Items(
+                    ids.iter()
+                        .map(|id| CredentialEntry {
+                            credential_id: Blob(id),
+                            state: CredentialState::Active,
+                        })
+                        .collect(),
+                ),
+                next_after: None,
+            });
+            let mut out = vec![0; 32768];
+            let n = encode_response(&mut out, &response, &q, Endpoint::Admin).unwrap();
+            out.truncate(n);
+            assert!(n > 4096);
+            let mut request = [0; 4096];
+            let n = encode_request(&mut request, &q, Endpoint::Admin).unwrap();
+            for over in [false, true] {
+                let path = std::env::temp_dir().join(format!(
+                    "wudo-admin-page-{}-{over}.sock",
+                    std::process::id()
+                ));
+                let listener = tokio::net::UnixListener::bind(&path).unwrap();
+                let payload = out.clone();
+                let task = tokio::spawn(async move {
+                    let (mut s, _) = listener.accept().await.unwrap();
+                    let mut bytes = Vec::new();
+                    s.read_to_end(&mut bytes).await.unwrap();
+                    let len = if over { 32769 } else { payload.len() as u32 };
+                    s.write_all(&len.to_be_bytes()).await.unwrap();
+                    if !over {
+                        s.write_all(&payload).await.unwrap();
+                    }
+                    s.shutdown().await.unwrap();
+                });
+                let result =
+                    exchange(&path, rustix::process::geteuid().as_raw(), &request[..n]).await;
+                if over {
+                    assert!(result.is_err());
+                } else {
+                    assert_eq!(result.unwrap(), out);
+                }
+                task.await.unwrap();
+                std::fs::remove_file(path).unwrap();
+            }
+        });
+    }
     #[test]
     fn wrong_server_identity_receives_no_administrative_payload() {
         let runtime = tokio::runtime::Builder::new_current_thread()

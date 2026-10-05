@@ -73,6 +73,12 @@ async fn exchange_with_store(
                     v2::Request::UserCreate(v) => {
                         Some(Command::Create(v.name.0.into(), v.label.0.into()))
                     }
+                    v2::Request::UserList(_)
+                    | v2::Request::CredentialList(_)
+                    | v2::Request::CredentialInspect(_)
+                    | v2::Request::CredentialRevoke(_) => {
+                        Some(Command::Administration(payload.clone()))
+                    }
                     v2::Request::UserInspect(v) => Some(Command::Inspect(v.name.0.into())),
                     _ => None,
                 };

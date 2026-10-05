@@ -307,3 +307,44 @@ map_struct!(UserInfo<'a> { user_id: UserId, name: Name<'a>, label: Label<'a> } o
 map_struct!(StoreReady { state: Ready } optional {});
 
 map_struct!(InstallationInitialize<'a> { origin: Text<'a, 270> } optional {});
+
+text_enum!(CredentialState { Active => "active", Revoked => "revoked" });
+text_enum!(Revoked { Revoked => "revoked" });
+map_struct!(UserList<'a> {} optional { after: Name<'a> });
+map_struct!(CredentialQuery<'a> { user_id: UserId } optional { after: Blob<'a, 1, 1023> });
+map_struct!(CredentialRef<'a> { user_id: UserId, credential_id: Blob<'a, 1, 1023> } optional {});
+map_struct!(CredentialEntry<'a> { credential_id: Blob<'a, 1, 1023>, state: CredentialState } optional {});
+map_struct!(UserPage<'a> { users: Items<UserInfo<'a>> } optional { next_after: Name<'a> });
+map_struct!(CredentialPage<'a> { user_id: UserId, credentials: Items<CredentialEntry<'a>> } optional { next_after: Blob<'a, 1, 1023> });
+map_struct!(CredentialInfo<'a> { user_id: UserId, credential_id: Blob<'a, 1, 1023>, state: CredentialState, fingerprint: Fingerprint } optional {});
+map_struct!(CredentialRevoked<'a> { user_id: UserId, credential_id: Blob<'a, 1, 1023>, state: Revoked } optional {});
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct Items<T>(pub Vec<T>);
+impl<'a, T: Wire<'a>> Wire<'a> for Items<T> {
+    fn read(bytes: &'a [u8]) -> Result<Self> {
+        let mut d = Decoder::new(bytes);
+        let n = d.array()?.ok_or(Error::InvalidRequest)?;
+        if n > 16 {
+            return Err(Error::InvalidRequest);
+        }
+        let mut items = Vec::with_capacity(n as usize);
+        for _ in 0..n {
+            let start = d.position();
+            super::bounded::span(&mut d)?;
+            items.push(T::read(&bytes[start..d.position()])?);
+        }
+        complete(bytes, &d)?;
+        Ok(Self(items))
+    }
+    fn write(&self, e: &mut Writer<'_>) -> Result<()> {
+        if self.0.len() > 16 {
+            return Err(Error::InvalidRequest);
+        }
+        e.array(self.0.len() as u64)?;
+        for item in &self.0 {
+            item.write(e)?;
+        }
+        Ok(())
+    }
+}

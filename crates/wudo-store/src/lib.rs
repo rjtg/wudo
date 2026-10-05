@@ -2,6 +2,8 @@
 //! Not a privileged path resolver or an authentication/authorization API.
 //! The caller must keep the directory and its ancestors stable and trusted for
 //! the store lifetime. No daemon integration or network-selected paths.
+mod administration;
+pub use administration::{CredentialSummary, Page};
 mod credentials;
 mod installation;
 pub use credentials::{MAX_ACTIVE_CREDENTIALS, MAX_CREDENTIALS, RECORD_FORMAT};

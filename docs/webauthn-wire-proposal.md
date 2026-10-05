@@ -137,7 +137,9 @@ admission. Maximum request sizes include the entire CBOR envelope.
 | `action.begin` | W | `{user_name: Name, action_id: ActionId}` | Action begin result below | 4096 |
 | `action.finish` | W | Assertion finish below | `{state: "accepted", operation_id: Handle}` | 12288 |
 
-All response frames are <=65536; only begin responses may exceed 4096.
+All response frames are <=65536. Begin responses may exceed 4096; the
+[administrative listing extension](credential-administration-proposal.md) also
+allows user-list replies up to 8192 and credential-list replies up to 32768.
 The first runtime enrollment slice may enable only the user/enrollment/
 registration rows plus status. `action.begin`/`action.finish` remain reserved
 until their execution and persistent authorization dependencies are implemented
@@ -255,8 +257,10 @@ does not expose approval as an alternative activation path.
 
 Closed opportunities return `unavailable`. Lost success responses may therefore
 be ambiguous; do not silently create another credential or retry activation.
-Persistent credential inspection/recovery through a later admin API is a
-prerequisite for production rollout, not a reason to retain tickets indefinitely.
+The [credential administration API](credential-administration-proposal.md) now
+provides persistent listing/inspection and targeted revocation for local recovery.
+Use the known credential ID to inspect durable state after a lost reply; do not
+retain tickets indefinitely or treat a fingerprint as proof of human ownership.
 
 ### Action ceremony (reserved until execution review)
 

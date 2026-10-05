@@ -86,6 +86,20 @@ Local setup and enrollment commands are documented in
 [enrollment](docs/enrollment-implementation.md). `wudo init --reset` is explicitly
 destructive to Wudo's identity state; normal init never overwrites it.
 
+Inspect users and manage individual credentials through the root-only CLI:
+
+```text
+sudo wudo user list
+sudo wudo credential list alice
+sudo wudo credential show alice CREDENTIAL_ID
+sudo wudo credential revoke alice CREDENTIAL_ID
+```
+
+Listings include users without passkeys and retained revoked credentials.
+Pages contain at most 16 entries and print a continuation command when needed.
+Revocation is permanent for the selected ID and does not rotate downstream
+secrets. See [credential administration](docs/credential-administration-proposal.md).
+
 Validate the example locally:
 
 ```text

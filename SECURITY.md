@@ -213,6 +213,13 @@ production recovery workflows remain under #12.
 
 ## Revocation semantics
 
+Local root can list/inspect credentials and permanently revoke an exact
+credential ID for its stored owner. Revoked records retain their ID reservation
+and cannot be reactivated or reassigned. Revoking the last credential is allowed;
+root can enroll a replacement. Other credentials and separately opened enrollment
+windows remain unchanged. Administrative requests are denied on the web socket.
+See [the administration contract](docs/credential-administration-proposal.md).
+
 Credential revocation is not equivalent to secret rotation.
 
 Deleting a credential's encrypted wrapper prevents future Wudo-mediated unwrapping with that credential. It cannot invalidate a copy of the downstream key that was already obtained.

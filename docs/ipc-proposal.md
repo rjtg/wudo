@@ -327,7 +327,9 @@ numeric UIDs/GIDs (no persistent accounts). It checks root CLI access, allowed
 web access, rejection of another UID in the web group, rejection of root on the
 web endpoint, socket modes, duplicate startup, SIGTERM/SIGINT, and cleanup with
 an incomplete connection, plus initialization, user persistence, enrollment
-open/inspect/cancel, and explicit reset. The host's `/run` and `/var/lib` are not
+open/inspect/cancel, and explicit reset. The next extension also checks user
+listing, empty credential listing and missing-target inspection/revocation
+failures; the maintainer confirmed that these additional checks all pass. The host's `/run` and `/var/lib` are not
 changed. Run only trusted local builds because this test executes them as root.
 The maintainer supplied a passing transcript for the expanded harness on
 2026-10-05, including both shutdown signals and persistence across restart.

@@ -1,4 +1,5 @@
 //! One bounded worker owns SQLite. A started transaction outlives its requester.
+mod administration;
 use std::{
     path::PathBuf,
     sync::{
@@ -15,6 +16,7 @@ use wudod::enrollment::{Enrollment, Verified};
 
 pub(crate) enum Command {
     Initialize,
+    Administration(Vec<u8>),
     Configure(String),
     Reset(String),
     Enrollment(wire::Endpoint, Vec<u8>),
@@ -318,6 +320,7 @@ fn dispatch(
                 return Err(Error::Unavailable);
             }
             match other {
+                Command::Administration(bytes) => administration::request(s, &bytes),
                 Command::Create(name, label) => s
                     .create_user(&name, &label)
                     .map(Reply::User)

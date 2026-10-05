@@ -253,3 +253,131 @@ fn explicit_reset_removes_active_and_revoked_credentials() {
             .unwrap()
     );
 }
+
+#[test]
+fn administrative_credential_pages_and_owned_terminal_revocation() {
+    let dir = directory();
+    let mut s = Store::initialize(dir.path()).unwrap();
+    let a = s.create_user("alice", "Alice").unwrap();
+    let b = s.create_user("bob", "Bob").unwrap();
+    let server = verifier();
+    let mut keys = Vec::new();
+    for _ in 0..18 {
+        let (_, key) = credential(&server, a.id);
+        s.activate_credential(a.id, &key).unwrap();
+        assert!(
+            s.revoke_owned_credential(b.id, key.cred_id().as_ref())
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            !s.inspect_credential(a.id, key.cred_id().as_ref())
+                .unwrap()
+                .unwrap()
+                .revoked
+        );
+        assert!(
+            s.revoke_owned_credential(a.id, key.cred_id().as_ref())
+                .unwrap()
+                .unwrap()
+                .revoked
+        );
+        keys.push(key);
+    }
+    let (_, active) = credential(&server, a.id);
+    s.activate_credential(a.id, &active).unwrap();
+    let first = s.list_credentials(a.id, None).unwrap().unwrap();
+    assert_eq!(first.items.len(), 16);
+    let second = s
+        .list_credentials(a.id, first.next_after.as_deref())
+        .unwrap()
+        .unwrap();
+    assert_eq!(second.items.len(), 3);
+    assert!(second.next_after.is_none());
+    let mut ids: Vec<_> = keys.iter().map(|k| k.cred_id().as_ref().to_vec()).collect();
+    ids.push(active.cred_id().as_ref().to_vec());
+    ids.sort();
+    assert_eq!(
+        first
+            .items
+            .iter()
+            .chain(&second.items)
+            .map(|c| c.id.clone())
+            .collect::<Vec<_>>(),
+        ids
+    );
+    assert!(
+        s.list_credentials(b.id, None)
+            .unwrap()
+            .unwrap()
+            .items
+            .is_empty()
+    );
+    assert!(
+        s.inspect_credential(b.id, active.cred_id().as_ref())
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        s.revoke_owned_credential(a.id, b"absent")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        s.revoke_owned_credential(a.id, keys[0].cred_id().as_ref())
+            .unwrap()
+            .unwrap()
+            .revoked
+    );
+    assert!(
+        s.credential_for_authentication(a.id, active.cred_id().as_ref())
+            .unwrap()
+            .is_some()
+    );
+    assert!(matches!(
+        s.activate_credential(a.id, &keys[0]),
+        Err(Error::Conflict)
+    ));
+    drop(s);
+    let s = Store::open(dir.path()).unwrap();
+    assert!(
+        s.inspect_credential(a.id, keys[0].cred_id().as_ref())
+            .unwrap()
+            .unwrap()
+            .revoked
+    );
+    assert!(
+        s.credential_for_authentication(a.id, keys[0].cred_id().as_ref())
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn owned_revocation_failure_rolls_back_and_requires_reopen() {
+    let dir = directory();
+    let mut s = Store::initialize(dir.path()).unwrap();
+    let u = s.create_user("alice", "Alice").unwrap();
+    let (_, key) = credential(&verifier(), u.id);
+    s.activate_credential(u.id, &key).unwrap();
+    let db = rusqlite::Connection::open(dir.path().join("identity.sqlite3")).unwrap();
+    db.execute_batch("CREATE TRIGGER fail_revoke AFTER UPDATE OF revoked ON credentials BEGIN SELECT RAISE(ABORT,'injected'); END").unwrap();
+    assert!(
+        s.revoke_owned_credential(u.id, key.cred_id().as_ref())
+            .is_err()
+    );
+    assert!(matches!(
+        s.inspect_credential(u.id, key.cred_id().as_ref()),
+        Err(Error::Unavailable)
+    ));
+    db.execute_batch("DROP TRIGGER fail_revoke").unwrap();
+    drop(db);
+    drop(s);
+    let s = Store::open(dir.path()).unwrap();
+    assert!(
+        !s.inspect_credential(u.id, key.cred_id().as_ref())
+            .unwrap()
+            .unwrap()
+            .revoked
+    );
+}
