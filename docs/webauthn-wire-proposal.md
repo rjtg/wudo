@@ -315,15 +315,16 @@ not currently enforced by Wudo. Rely on the established verifier's existing
 parser safeguards and retain hard field byte caps. Do not introduce a custom
 parser or silently claim these deferred checks are implemented.
 
-The JSON envelope's known fields must have WebAuthn types. Unknown inner JSON
-members, including new standards fields, are rejected in this initial strict
-profile until reviewed; preserve original bytes after validation for signature
-verification. Accepted allowed fields are `type`, `challenge`, `origin`, and
-optional `crossOrigin:false`; `topOrigin`, token binding and embedded ceremonies
-are unsupported. This strict codec profile requires browser/verifier compatibility fixtures
-before runtime integration. Map inner structural failures to `invalid-request`, never echo
-input or library errors. Cross-origin behavior still needs dedicated verifier
-and adapter tests before enabling a runtime ceremony.
+The JSON envelope's known fields must have WebAuthn types. The maintainer
+approved tolerating additional client-data members for browser compatibility.
+An established Serde JSON parser checks the complete document, rejecting duplicate
+keys (including escaped-equivalent and nested keys), more than eight container
+levels, more than 64 total members/elements, and input above 4096 bytes before
+additional values are ignored. Preserve original bytes for signature verification.
+Required fields remain `type`, `challenge`, `origin`, with optional
+`crossOrigin:false`; `topOrigin`, token binding and embedded ceremonies remain
+unsupported. This exception applies only to WebAuthn client data, not Wudo IPC
+schemas. Map failures to `invalid-request`, never echo input or library errors.
 
 Attestation formats, COSE validation, signature algorithms, RP hash and signed
 authenticator extensions remain the verifier's responsibility. The above guards

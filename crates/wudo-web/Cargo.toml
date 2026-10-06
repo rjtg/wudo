@@ -6,3 +6,15 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+tokio = { version = "1", default-features = false, features = ["rt", "net", "io-util", "time", "sync", "signal"] }
+tower = { version = "0.5", features = ["util"] }
+rustix = { version = "1", default-features = false, features = ["net", "process", "std"] }
+wudo-protocol = { path = "../wudo-protocol", features = ["v2"] }
+
+[dev-dependencies]
+tempfile = "3"

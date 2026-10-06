@@ -100,7 +100,7 @@ Do not assume `wudo-cli` and `wudo-web` have the same IPC permissions. Their all
 5. `wudod` has no TCP/HTTP listener.
 6. `wudo-web` never runs as root.
 7. Configuration and privileged state must not be writable by the `wudo-web` account.
-8. Unknown actions, fields, protocol versions, states, or policy values fail closed.
+8. Unknown actions, Wudo schema fields, protocol versions, states, or policy values fail closed. Reviewed exception: additional WebAuthn client-data JSON fields are tolerated after bounded syntax/duplicate validation; required ceremony fields remain checked and original bytes remain intact.
 9. Bound all request sizes, output sizes, and execution times.
 10. Never place secrets in logs, command-line arguments, panic messages, URLs, or error responses.
 11. Prefer passing secrets through memory, pipes, or file descriptors.
@@ -190,7 +190,8 @@ root-selected user in a bounded one-enrollment window. It does not bypass
 WebAuthn verification or create grants. Relay-driven enrollment takeover is an
 accepted risk for this opt-in mode; see SECURITY.md and the ceremony proposal.
 The daemon and local CLI implement this option under the reviewed wire/state
-contract; browser UI and real-device validation remain pending.
+contract. The browser enrollment relay and Rust/WASM UI are implemented;
+real-device validation remains pending.
 
 Store only public credential material and metadata. Never store the passkey private key or biometric information.
 

@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Wudo · Enroll a passkey</title><link rel="stylesheet" href="/style.css"><script type="module" src="/start.js"></script></head>
+<body><main><p class="brand">Wudo</p><h1>Enroll a passkey</h1><p>Your administrator must open enrollment before you begin.</p>
+<label for="ticket">Enrollment code</label><input id="ticket" type="password" maxlength="64" autocomplete="off" spellcheck="false"><p class="hint">Paste the code provided privately by your administrator. Never put it in a URL.</p>
+<label class="choice"><input id="insecure" type="checkbox"> My administrator opened enrollment without a code</label>
+<p class="hint">Without a code, the first valid registration wins. Use this only when your administrator explicitly enabled it.</p>
+<button id="enroll" disabled>Create passkey</button>
+<p id="status" role="status" aria-live="polite">Loading secure enrollment…</p><pre id="identity"></pre>
+<p class="hint">Enrollment adds a passkey. It does not grant new permissions or set up disk encryption.</p></main></body></html>

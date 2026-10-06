@@ -246,3 +246,27 @@ Require explicit review before:
 - adding privileged filesystem operations;
 - introducing `unsafe`;
 - changing bootstrap or recovery semantics.
+
+
+## Browser enrollment relay
+
+The web service serves a Rust/WASM enrollment UI behind a same-host HTTPS proxy,
+listens only on loopback and refuses root execution. The HTTP origin/host
+allowlist is defense in depth, not WebAuthn authority: the daemon independently
+uses the installation identity configured by root. HTTP accepts only the three
+existing registration operations, with bounded bodies, connections and deadlines;
+there is no generic administrative or action relay. Browser tickets use POST
+bodies only and are not persisted. No reusable authorization sessions are added.
+See [the browser contract](docs/browser-enrollment.md) for limits and deployment.
+
+## WebAuthn client-data extensibility
+
+The maintainer approved tolerating additional fields inside WebAuthn client-data
+JSON for browser compatibility. This is not an exception for Wudo IPC fields.
+Validate the original JSON with Serde under the 4096-byte, eight-container-level
+and 64-member/element limits, rejecting duplicate keys at every level and
+trailing documents. Required type/challenge/origin and optional crossOrigin
+retain their existing checks. Cross-origin ceremonies, topOrigin and tokenBinding
+remain unsupported. The verifier receives the original bytes without stripping
+or reserializing additional fields and independently verifies challenge/origin
+and cryptographic material.

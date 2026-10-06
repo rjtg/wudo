@@ -6,6 +6,7 @@ members = [
     "crates/wudod",
     "crates/wudo-web",
     "crates/wudo-cli",
+    "ui/wudo-ui",
 ]
 resolver = "3"
 

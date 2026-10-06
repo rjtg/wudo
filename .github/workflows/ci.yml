@@ -39,3 +39,23 @@ jobs:
         run: cargo clippy --manifest-path experiments/webauthn/Cargo.toml --all-targets --all-features --locked -- -D warnings
       - name: Test synthetic WebAuthn ceremonies
         run: cargo test --manifest-path experiments/webauthn/Cargo.toml --locked
+
+  wasm-ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install stable Rust and WASM target
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          rustup target add wasm32-unknown-unknown
+      - name: Install matching browser build tools
+        run: cargo install wasm-bindgen-cli --version 0.2.129 --locked
+      - name: Lint browser code
+        run: cargo clippy -p wudo-ui --target wasm32-unknown-unknown --all-targets --locked -- -D warnings
+      - name: Test WASM option mapping
+        env:
+          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
+        run: cargo test -p wudo-ui --target wasm32-unknown-unknown --locked
+      - name: Build browser assets
+        run: python3 scripts/build-ui.py

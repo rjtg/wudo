@@ -1,0 +1,7 @@
+**/target
+.git
+.env*
+**/node_modules
+ui/wudo-ui/pkg
+ui/wudo-ui/dist
+**/__pycache__

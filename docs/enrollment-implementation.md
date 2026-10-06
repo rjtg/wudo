@@ -1,6 +1,7 @@
 # Daemon enrollment implementation
 
-Status: daemon enrollment IPC and local CLI implemented locally. Browser UI is pending.
+Status: daemon enrollment IPC and local CLI implemented locally. Browser relay/UI are implemented in the [next slice](browser-enrollment.md);
+real-device validation remains pending.
 Tracking: [#12](https://github.com/rjtg/wudo/issues/12),
 [roadmap #20](https://github.com/rjtg/wudo/issues/20).
 
@@ -94,9 +95,9 @@ URL, and cannot be retrieved by inspect. Approval names the exact candidate;
 inspection labels the fingerprint as credential identity, not human ownership.
 Insecure opening warns about the enrollment race and inherited user permissions;
 it neither creates grants nor provisions secret wrappers. The browser must
-still complete registration through the web-runtime IPC operations. `wudo-web`
-and the Rust/WASM browser UI are not yet implemented, so these commands alone
-do not provide a complete browser enrollment experience.
+still complete registration through the web-runtime IPC operations. The [web relay and Rust/WASM UI](browser-enrollment.md) now implement this
+flow behind a separately configured HTTPS proxy. The local commands alone do
+not launch the browser UI or install HTTPS.
 
 Durable credential listing, inspection and targeted revocation are now available
 through the [administration CLI](credential-administration-proposal.md). After a

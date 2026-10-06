@@ -122,7 +122,9 @@ wudo/
     └── wudo-ui/
 ```
 
-The UI is written in Rust and compiled to WebAssembly, with browser bindings and generated JavaScript glue as needed. `wudo-web` serves it. The frontend framework remains undecided.
+The UI is written in Rust and compiled to WebAssembly, with browser bindings and generated JavaScript glue as needed. `wudo-web` serves it. The initial enrollment form uses wasm-bindgen/web-sys directly; a future action
+dashboard framework remains undecided. See [browser enrollment](browser-enrollment.md)
+for the Axum relay, bounded HTTP transport and selected HTTPS proxy deployment.
 
 Malicious UI delivery by a compromised `wudo-web` is an accepted risk, including theft of browser-held secrets and misleading action displays. UI attestation is out of scope. Authenticated encryption still keeps plaintext secrets out of intended relay messages.
 

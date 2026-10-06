@@ -460,7 +460,7 @@ fn embedded_json_and_cbor_are_bounded_without_reserialization() {
         br#"{"type":"webauthn.create","challenge":"x","origin":"x","origin":"y"}"#.as_slice(),
         br#"{"type":"webauthn.create","challenge":"x","origin":"x","crossOrigin":true}"#,
         br#"{"type":"webauthn.create","challenge":"x","origin":"x","crossOrigin":null}"#,
-        br#"{"type":"webauthn.create","challenge":"x","origin":"x","extra":{}}"#,
+        br#"{"type":"webauthn.create","challenge":"x","origin":"x","extra":{"a":1,"a":2}}"#,
         br#"{"type":"webauthn.get","challenge":"x","origin":"x"}"#,
         b"{} {}",
         b"[]",
@@ -642,4 +642,64 @@ fn administrative_store_operations_are_strict_and_admin_only() {
         };
         response_roundtrip(&response, &request, Endpoint::Admin);
     }
+}
+
+#[test]
+fn extensible_client_data_keeps_bounds_and_original_bytes() {
+    let prefix = r#"{"type":"webauthn.create","challenge":"x","origin":"x","extra":"#;
+    let check = |json: &[u8], accepted: bool| {
+        let Request::RegistrationFinish(mut v) = registration() else {
+            unreachable!()
+        };
+        v.client_data = Blob(json);
+        let q = Request::RegistrationFinish(v);
+        let mut bytes = vec![0; 40960];
+        let encoded = encode_request(&mut bytes, &q, Endpoint::Web);
+        assert_eq!(encoded.is_ok(), accepted);
+        if let Ok(n) = encoded {
+            let Request::RegistrationFinish(decoded) =
+                decode_request(&bytes[..n], Endpoint::Web).unwrap()
+            else {
+                unreachable!()
+            };
+            assert_eq!(decoded.client_data.0, json);
+        }
+    };
+    for extra in [
+        r#""browser compatibility note""#,
+        "null",
+        "true",
+        "1.5",
+        r#"{"nested":[1,false,null]}"#,
+    ] {
+        check(format!("{prefix}{extra}}}").as_bytes(), true);
+    }
+    for extra in [r#"{"a":1,"\u0061":2}"#, "[1,]", "NaN"] {
+        check(format!("{prefix}{extra}}}").as_bytes(), false);
+    }
+    for (depth, accepted) in [(7, true), (8, false)] {
+        check(
+            format!("{prefix}{}0{}}}", "[".repeat(depth), "]".repeat(depth)).as_bytes(),
+            accepted,
+        );
+    }
+    for (count, accepted) in [(60, true), (61, false)] {
+        check(
+            format!("{prefix}[{}]}}", vec!["0"; count].join(",")).as_bytes(),
+            accepted,
+        );
+    }
+    for suffix in [
+        r#", "extra":0"#,
+        r#", "topOrigin":"https://other.test""#,
+        r#", "tokenBinding":null"#,
+    ] {
+        check(format!("{prefix}null{suffix}}}").as_bytes(), false);
+    }
+    check(format!("{prefix}null}} {{}}").as_bytes(), false);
+    check(br#"["webauthn.create","x","x",false]"#, false);
+    check(
+        format!("{prefix}\"{}\"}}", "x".repeat(4096)).as_bytes(),
+        false,
+    );
 }

@@ -402,7 +402,7 @@ impl Enrollment {
             unreachable!()
         };
         self.workers
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
                 (n < 2).then_some(n + 1)
             })
             .map_err(|_| Error::Busy)?;

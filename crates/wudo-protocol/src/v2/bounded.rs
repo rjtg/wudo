@@ -120,7 +120,6 @@ pub(super) fn inner_cbor(bytes: &[u8]) -> Result<()> {
 }
 
 #[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 struct ClientData {
     #[serde(rename = "type")]
     kind: String,
@@ -133,8 +132,20 @@ struct ClientData {
 }
 
 pub(super) fn client_data(bytes: &[u8], registration: bool) -> Result<()> {
-    // Exactly three strings and an optional boolean: no containers can nest.
-    // The input is already capped to 4096 bytes by the outer schema.
+    // Validate complexity and duplicate keys before serde skips extension values.
+    // Never rewrite these bytes: the verifier receives the original document.
+    use serde::de::DeserializeSeed;
+    if bytes.is_empty() || bytes.len() > 4096 {
+        return Err(Error::InvalidRequest);
+    }
+    let mut decoder = serde_json::Deserializer::from_slice(bytes);
+    JsonBound {
+        depth: 0,
+        remaining: &mut 64,
+    }
+    .deserialize(&mut decoder)
+    .map_err(|_| Error::InvalidRequest)?;
+    decoder.end().map_err(|_| Error::InvalidRequest)?;
     let data: ClientData = serde_json::from_slice(bytes).map_err(|_| Error::InvalidRequest)?;
     if data.kind
         != if registration {
@@ -150,6 +161,99 @@ pub(super) fn client_data(bytes: &[u8], registration: bool) -> Result<()> {
     }
     // Challenge/origin values and signatures are checked by the verifier.
     Ok(())
+}
+
+/// A bounded Serde visitor, not a JSON parser. Serde owns syntax/UTF-8 handling.
+struct JsonBound<'a> {
+    depth: usize,
+    remaining: &'a mut usize,
+}
+impl JsonBound<'_> {
+    fn member<E: serde::de::Error>(&mut self) -> std::result::Result<(), E> {
+        *self.remaining = self
+            .remaining
+            .checked_sub(1)
+            .ok_or_else(|| E::custom("JSON budget"))?;
+        Ok(())
+    }
+    fn container<E: serde::de::Error>(&self) -> std::result::Result<(), E> {
+        if self.depth >= 8 {
+            return Err(E::custom("JSON depth"));
+        }
+        Ok(())
+    }
+}
+impl<'de> serde::de::DeserializeSeed<'de> for JsonBound<'_> {
+    type Value = ();
+    fn deserialize<D: serde::Deserializer<'de>>(self, d: D) -> std::result::Result<(), D::Error> {
+        d.deserialize_any(self)
+    }
+}
+impl<'de> serde::de::Visitor<'de> for JsonBound<'_> {
+    type Value = ();
+    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("bounded JSON")
+    }
+    fn visit_map<M: serde::de::MapAccess<'de>>(
+        mut self,
+        mut map: M,
+    ) -> std::result::Result<(), M::Error> {
+        use serde::de::Error;
+        self.container()?;
+        let mut keys = std::collections::BTreeSet::new();
+        while let Some(key) = map.next_key::<String>()? {
+            self.member()?;
+            if !keys.insert(key.clone()) {
+                return Err(M::Error::custom("duplicate JSON key"));
+            }
+            // Known unsupported ceremony semantics remain rejected.
+            if self.depth == 0 && matches!(key.as_str(), "topOrigin" | "tokenBinding") {
+                return Err(M::Error::custom("unsupported ceremony field"));
+            }
+            map.next_value_seed(JsonBound {
+                depth: self.depth + 1,
+                remaining: self.remaining,
+            })?;
+        }
+        Ok(())
+    }
+    fn visit_seq<S: serde::de::SeqAccess<'de>>(
+        mut self,
+        mut seq: S,
+    ) -> std::result::Result<(), S::Error> {
+        if self.depth == 0 {
+            return Err(serde::de::Error::custom("client data must be an object"));
+        }
+        self.container()?;
+        while seq
+            .next_element_seed(JsonBound {
+                depth: self.depth + 1,
+                remaining: self.remaining,
+            })?
+            .is_some()
+        {
+            self.member()?;
+        }
+        Ok(())
+    }
+    fn visit_bool<E: serde::de::Error>(self, _: bool) -> std::result::Result<(), E> {
+        Ok(())
+    }
+    fn visit_i64<E: serde::de::Error>(self, _: i64) -> std::result::Result<(), E> {
+        Ok(())
+    }
+    fn visit_u64<E: serde::de::Error>(self, _: u64) -> std::result::Result<(), E> {
+        Ok(())
+    }
+    fn visit_f64<E: serde::de::Error>(self, _: f64) -> std::result::Result<(), E> {
+        Ok(())
+    }
+    fn visit_str<E: serde::de::Error>(self, _: &str) -> std::result::Result<(), E> {
+        Ok(())
+    }
+    fn visit_unit<E: serde::de::Error>(self) -> std::result::Result<(), E> {
+        Ok(())
+    }
 }
 
 /// Bounds the outer attestation CBOR syntax only. Embedded authenticator data

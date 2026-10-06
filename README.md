@@ -74,12 +74,14 @@ The repository contains a minimal Cargo workspace using stable Rust:
 - `crates/wudod`: Unix IPC daemon, identity storage and enrollment verification.
 - `crates/wudo-web`: web service scaffold.
 - `crates/wudo-cli`: local administration and offline validation, binary name `wudo`.
-- `ui/wudo-ui`: reserved for the Rust/WASM frontend; not yet a Cargo crate.
+- `ui/wudo-ui`: Rust/WASM passkey enrollment UI served by `wudo-web`.
 
 The daemon uses Tokio, SQLite and the established webauthn-rs verifier. It
 requires root for runtime use; ordinary Cargo tests use isolated temporary state.
-The web service and Rust/WASM UI remain scaffolds. Privileged actions and secret
-transport are not implemented yet.
+The web service relays enrollment over localhost HTTP behind an HTTPS proxy,
+and serves the Rust/WASM UI. Privileged actions and secret transport are not
+implemented yet. See [browser enrollment](docs/browser-enrollment.md) for build,
+proxy setup, enrollment and remaining real-device validation.
 
 Local setup and enrollment commands are documented in
 [installation setup](docs/installation-setup.md) and
@@ -132,8 +134,7 @@ provisioning. None needs to be settled to build this scaffold.
 
 Use [GitHub Issues](https://github.com/rjtg/wudo/issues) for planned work and
 progress. The [roadmap index (#20)](https://github.com/rjtg/wudo/issues/20) links
-implementation work packages and the design decisions that gate them. The
-recommended next design task is [configuration schema and validation (#15)](https://github.com/rjtg/wudo/issues/15).
+implementation work packages and the design decisions that gate them.
 
 Read a task with `gh issue view <number> --repo rjtg/wudo --comments`.
 Reviewed architecture/security decisions remain in the repository documents.
