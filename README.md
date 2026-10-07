@@ -72,7 +72,7 @@ The repository contains a minimal Cargo workspace using stable Rust:
 
 - `crates/wudo-core`: typed offline action/resource configuration and validation.
 - `crates/wudod`: Unix IPC daemon, identity storage and enrollment verification.
-- `crates/wudo-web`: web service scaffold.
+- `crates/wudo-web`: bounded enrollment relay and static UI service.
 - `crates/wudo-cli`: local administration and offline validation, binary name `wudo`.
 - `ui/wudo-ui`: Rust/WASM passkey enrollment UI served by `wudo-web`.
 

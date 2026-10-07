@@ -1,6 +1,6 @@
 # Trusted action configuration and user grants
 
-Status: **approved by the maintainer and implemented locally**. Tracking:
+Status: **approved by the maintainer and implemented and published**. Tracking:
 [#23](https://github.com/rjtg/wudo/issues/23), prerequisite to action
 authentication under #12/#15/#16 and roadmap #20.
 
@@ -182,3 +182,6 @@ and the CLI in a private namespace with temporary `/etc`, `/run` and `/var/lib`.
 All 109 workspace tests, formatting, workspace and WASM-target Clippy pass.
 The maintainer confirmed that the expanded privileged smoke test passed. Action execution and physical-device testing remain
 outside this slice.
+
+Published in `6beec12`, included in green descendant `e6eea9b`. Validation history
+is recorded in [issue #23 comments](https://github.com/rjtg/wudo/issues/23).

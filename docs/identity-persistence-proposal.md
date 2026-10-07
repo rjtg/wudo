@@ -1,6 +1,6 @@
 # SQLite identity storage
 
-Status: **SQLite and the isolated user-storage slice accepted; implemented locally**.
+Status: **SQLite and the isolated user-storage slice accepted; implemented and published**.
 Tracking: [#3](https://github.com/rjtg/wudo/issues/3),
 [#15](https://github.com/rjtg/wudo/issues/15), and
 [ceremony integration #12](https://github.com/rjtg/wudo/issues/12).
