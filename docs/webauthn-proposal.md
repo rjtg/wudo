@@ -289,3 +289,14 @@ purpose. Automatic activation is allowed only through the explicit root-initiate
 `--insecure` exception, accepting relay-driven enrollment takeover during that
 window. Discoverable login may improve UX later; account-first keeps the
 initial principal/credential binding explicit.
+
+
+## Systemd execution follow-up
+
+The [systemd execution contract](systemd-execution-contract.md) records the
+maintainer's subsequent decisions: start/stop without prerequisites, systemd-owned
+jobs, no automatic retries, state-based availability and polling. It also permits
+short-lived **read-only viewing sessions**, never session-authorized execution.
+Earlier no-session wording applies to execution authorization. The existing
+runtime/codec is unchanged; exact new wire schemas and the meaning of existing
+execution-timeout fields still require reconciliation before implementation.

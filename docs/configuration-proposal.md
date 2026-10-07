@@ -249,3 +249,14 @@ Alternatives deferred: generic executable actions, recursive dependencies,
 free-form step lists, duplicated resource definitions per action, and permissions
 in static configuration. Typed operations keep targets and secret requirements
 explicit while meeting the initial Pi use case.
+
+
+## Systemd execution follow-up
+
+The [systemd execution contract](systemd-execution-contract.md) records the
+maintainer's subsequent decisions: start/stop without prerequisites, systemd-owned
+jobs, no automatic retries, state-based availability and polling. It also permits
+short-lived **read-only viewing sessions**, never session-authorized execution.
+Earlier no-session wording applies to execution authorization. The existing
+runtime/codec is unchanged; exact new wire schemas and the meaning of existing
+execution-timeout fields still require reconciliation before implementation.

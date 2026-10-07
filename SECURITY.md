@@ -281,3 +281,19 @@ referenced resource through a persisted revision; changes, removal, or missing
 configuration delete affected grants. Invalid configuration fails startup.
 Enrolling a passkey creates no grant. These administrative handlers do not yet
 enable action authentication or execution.
+
+
+## Agreed next systemd slice (not yet implemented)
+
+See [the execution contract](docs/systemd-execution-contract.md). A daemon-verified
+viewing session may list authorized actions and poll state, but never authorize
+execution. Sessions use a root-configurable absolute lifetime (five-minute
+default), exist only in daemon/browser memory, and recheck credentials/grants on
+every read. Restart/reset invalidates them. Every action still needs a fresh
+purpose-bound assertion and current authorization at admission.
+
+Systemd owns submitted jobs. Wudo does not automatically retry submissions or
+cancel/undo them on browser disconnect or observation timeout. State checks gate
+start/stop and conflicts are rejected without queuing. Accepted submission is
+not successful completion or application health. Exact session protocol,
+systemd interface and timeout-field changes remain explicit implementation gates.
