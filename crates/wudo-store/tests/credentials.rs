@@ -384,3 +384,178 @@ fn owned_revocation_failure_rolls_back_and_requires_reopen() {
             .revoked
     );
 }
+
+fn authenticate(
+    server: &Webauthn,
+    client: &mut WebauthnAuthenticator<SoftPasskey>,
+    key: &Passkey,
+) -> AuthenticationResult {
+    let (options, state) = server
+        .start_passkey_authentication(std::slice::from_ref(key))
+        .unwrap();
+    let response = client
+        .do_authentication(Url::parse("https://wudo.example.test").unwrap(), options)
+        .unwrap();
+    server
+        .finish_passkey_authentication(&response, &state)
+        .unwrap()
+}
+
+#[test]
+fn authentication_metadata_is_durable_and_stale_snapshots_conflict() {
+    let dir = directory();
+    let server = verifier();
+    let mut store = Store::initialize(dir.path()).unwrap();
+    let user = store.create_user("alice", "Alice").unwrap().id;
+    let (mut client, key) = credential(&server, user);
+    let id = key.cred_id().as_ref();
+    store.activate_credential(user, &key).unwrap();
+    let a = store.authentication_snapshot(user, id).unwrap().unwrap();
+    let mut competing = Store::open(dir.path()).unwrap();
+    let b = competing
+        .authentication_snapshot(user, id)
+        .unwrap()
+        .unwrap();
+    let older = authenticate(&server, &mut client, a.passkey());
+    let newer = authenticate(&server, &mut client, b.passkey());
+    assert!(competing.commit_authentication(b, &newer).unwrap());
+    drop(competing);
+    assert_eq!(store.commit_authentication(a, &older), Err(Error::Conflict));
+    drop(store);
+    let mut store = Store::open(dir.path()).unwrap();
+    let restored = store.authentication_snapshot(user, id).unwrap().unwrap();
+    let mut expected = key.clone();
+    expected.update_credential(&newer).unwrap();
+    assert_eq!(
+        serde_json::to_vec(restored.passkey()).unwrap(),
+        serde_json::to_vec(&expected).unwrap()
+    );
+    let result = authenticate(&server, &mut client, restored.passkey());
+    assert!(store.commit_authentication(restored, &result).unwrap());
+}
+
+#[test]
+fn authentication_update_rechecks_owner_revocation_reset_and_result_identity() {
+    let dir = directory();
+    let server = verifier();
+    let mut store = Store::initialize(dir.path()).unwrap();
+    store
+        .configure_installation("https://wudo.example.test")
+        .unwrap();
+    let user = store.create_user("alice", "Alice").unwrap().id;
+    let other = store.create_user("bob", "Bob").unwrap().id;
+    let (mut client, key) = credential(&server, user);
+    let (mut other_client, other_key) = credential(&server, other);
+    let id = key.cred_id().as_ref();
+    store.activate_credential(user, &key).unwrap();
+    assert!(store.authentication_snapshot(other, id).unwrap().is_none());
+    let snapshot = store.authentication_snapshot(user, id).unwrap().unwrap();
+    let mismatch = authenticate(&server, &mut other_client, &other_key);
+    assert_eq!(
+        store.commit_authentication(snapshot, &mismatch),
+        Err(Error::InvalidInput)
+    );
+    let snapshot = store.authentication_snapshot(user, id).unwrap().unwrap();
+    let result = authenticate(&server, &mut client, snapshot.passkey());
+    store.revoke_credential(id).unwrap();
+    assert_eq!(
+        store.commit_authentication(snapshot, &result),
+        Err(Error::Conflict)
+    );
+    store.activate_credential(other, &other_key).unwrap();
+    let snapshot = store
+        .authentication_snapshot(other, other_key.cred_id().as_ref())
+        .unwrap()
+        .unwrap();
+    store
+        .reset_installation("https://wudo.example.test")
+        .unwrap();
+    let replacement = store.create_user("bob", "Bob").unwrap().id;
+    store.activate_credential(replacement, &other_key).unwrap();
+    assert_eq!(
+        store.commit_authentication(snapshot, &mismatch),
+        Err(Error::Conflict)
+    );
+}
+
+#[test]
+fn failed_metadata_write_rolls_back_and_poisoned_store_requires_reopen() {
+    let dir = directory();
+    let server = verifier();
+    let mut store = Store::initialize(dir.path()).unwrap();
+    let user = store.create_user("alice", "Alice").unwrap().id;
+    let (mut client, key) = credential(&server, user);
+    store.activate_credential(user, &key).unwrap();
+    let snapshot = store
+        .authentication_snapshot(user, key.cred_id().as_ref())
+        .unwrap()
+        .unwrap();
+    let result = authenticate(&server, &mut client, snapshot.passkey());
+    let c = rusqlite::Connection::open(dir.path().join("identity.sqlite3")).unwrap();
+    c.execute_batch("CREATE TRIGGER fail_metadata BEFORE UPDATE OF record ON credentials BEGIN SELECT RAISE(ABORT,'test'); END;").unwrap();
+    assert!(store.commit_authentication(snapshot, &result).is_err());
+    assert!(
+        store
+            .authentication_snapshot(user, key.cred_id().as_ref())
+            .is_err()
+    );
+    c.execute_batch("DROP TRIGGER fail_metadata").unwrap();
+    drop(c);
+    drop(store);
+    let store = Store::open(dir.path()).unwrap();
+    let snapshot = store
+        .authentication_snapshot(user, key.cred_id().as_ref())
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        serde_json::to_vec(snapshot.passkey()).unwrap(),
+        serde_json::to_vec(&key).unwrap()
+    );
+}
+
+#[test]
+fn unchanged_metadata_still_checks_revocation_and_backup_flags_are_persisted() {
+    let dir = directory();
+    let server = verifier();
+    let mut store = Store::initialize(dir.path()).unwrap();
+    let user = store.create_user("alice", "Alice").unwrap().id;
+    let (mut client, key) = credential(&server, user);
+    let id = key.cred_id().as_ref();
+    store.activate_credential(user, &key).unwrap();
+    let result = authenticate(&server, &mut client, &key);
+    // Storage-only fixtures for counterless/synchronized credentials. These
+    // modified results are NOT evidence of successful WebAuthn verification.
+    let mut data = serde_json::to_value(&result).unwrap();
+    data["counter"] = serde_json::json!(0);
+    data["needs_update"] = serde_json::json!(false);
+    let unchanged: AuthenticationResult = serde_json::from_value(data.clone()).unwrap();
+    let snapshot = store.authentication_snapshot(user, id).unwrap().unwrap();
+    assert!(!store.commit_authentication(snapshot, &unchanged).unwrap());
+    let stale = store.authentication_snapshot(user, id).unwrap().unwrap();
+    let snapshot = store.authentication_snapshot(user, id).unwrap().unwrap();
+    data["needs_update"] = serde_json::json!(true);
+    data["backup_eligible"] = serde_json::json!(true);
+    data["backup_state"] = serde_json::json!(true);
+    let backed_up: AuthenticationResult = serde_json::from_value(data).unwrap();
+    assert!(store.commit_authentication(snapshot, &backed_up).unwrap());
+    assert_eq!(
+        store.commit_authentication(stale, &unchanged),
+        Err(Error::Conflict)
+    );
+    drop(store);
+    let mut store = Store::open(dir.path()).unwrap();
+    let snapshot = store.authentication_snapshot(user, id).unwrap().unwrap();
+    let mut expected = key;
+    expected.update_credential(&backed_up).unwrap();
+    assert_eq!(
+        serde_json::to_vec(snapshot.passkey()).unwrap(),
+        serde_json::to_vec(&expected).unwrap()
+    );
+    store
+        .revoke_credential(expected.cred_id().as_ref())
+        .unwrap();
+    assert_eq!(
+        store.commit_authentication(snapshot, &backed_up),
+        Err(Error::Conflict)
+    );
+}

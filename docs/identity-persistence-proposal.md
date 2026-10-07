@@ -145,8 +145,9 @@ Tests cover a genuine verified credential surviving restart and verifying an
 assertion, owner isolation, duplicate IDs, terminal revocation, capacity,
 corrupt/incompatible records, and v1-to-v2 preservation.
 
-Authentication must still recheck current credential status at admission and
-persist verifier metadata updates in a future slice. A previously returned
+Authentication must still recheck current credential status at admission.
+The internal metadata persistence API below is implemented; daemon ceremony
+integration remains a future slice. A previously returned
 credential clone does not prove that the credential remains active.
 
 ## Installation settings (schema v3)
@@ -169,3 +170,45 @@ Opening validates exact schemas, bounded canonical definitions, revision lengths
 and all grant references. Reconciliation and mutation failures fail closed.
 Reset deletes grants and catalog entries in the identity-reset transaction;
 the daemon then reconciles its startup snapshot before returning success.
+
+
+## Authentication metadata updates (schema v4, no migration)
+
+Implemented internal API for the first slice of #24. `authentication_snapshot`
+returns an opaque owner-bound snapshot of one active credential. Its read-only
+passkey is the input to the established verifier; the snapshot has no public
+constructor, mutable fields, Debug or serialization implementation.
+
+`commit_authentication` consumes that snapshot and accepts the verifier's
+`AuthenticationResult`. It uses webauthn-rs `Passkey::update_credential` rather
+than replacing client-selected credential data or implementing counter logic.
+An IMMEDIATE SQLite transaction rechecks owner, active status and exact canonical
+record bytes. Missing/revoked/reassigned credentials or differing current metadata
+return Conflict; the caller must discard the result and start a new ceremony,
+not retry it against a newer snapshot. This conservatively rejects even a newer
+counter result when its verification snapshot is stale.
+
+The update preserves ID, owner, public key, record format and revocation state.
+Existing 16 KiB record bounds and canonical serialization apply. Commit precedes
+success; SQL/storage failures roll back and poison the Store until validated
+reopen. Conflicts and mismatched result IDs do not poison the Store. Backup state
+and eligibility changes are applied through the library as well as counters.
+Even when the library reports no metadata change, owner/status/snapshot checks
+and the transaction are required. The returned boolean means metadata changed,
+not authentication or authorization success.
+
+This API is trusted internal persistence, not a cryptographic proof boundary:
+AuthenticationResult is a library data type that can be deserialized. Only an
+actual successful, purpose-bound, single-use verification may supply it. It must
+never be accepted from IPC. Runtime still owns challenge consumption, origin/RP,
+UV, expiry, reset generation, current grants/revisions and final admission.
+No-change/counterless authentications do not create a record revision; matching
+bytes are not replay detection or proof that no intervening ceremony occurred.
+Daemon serialization must prevent reset/revocation between final admission and
+submission; this storage transaction alone does not authorize a systemd call.
+
+Tests use genuine software-authenticator verification for counter persistence,
+stale snapshots across Store connections, result-ID mismatch, reset/revocation,
+rollback and reopen. Explicitly synthetic result fixtures cover counterless and
+backup-flag storage paths; those fixtures do not claim cryptographic verification.
+No daemon handlers, IPC fields, dependencies or database schema change here.

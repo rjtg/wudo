@@ -150,7 +150,9 @@ ignore those fields or reinterpret them as health checks.
 
 1. **Credential metadata persistence:** bounded transactional update API and tests
    for concurrent verification, revocation/reset races, failures and reopen.
-   No action handlers yet.
+   Internal snapshot/commit storage API is now implemented; see
+   [metadata persistence](identity-persistence-proposal.md#authentication-metadata-updates-schema-v4-no-migration).
+   Daemon ceremony/admission integration remains pending. No action handlers yet.
 2. **Viewing-session wire/config contract and implementation:** purpose-bound
    sign-in, five-minute default, root configuration, bounded session storage,
    owner/grant-filtered pages and expiry/revocation/reset tests. Review exact

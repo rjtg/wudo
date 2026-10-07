@@ -2,7 +2,20 @@
 //! may reach activation; accepting a Passkey is not proof of verification.
 use crate::{Error, Result, Store, UserId};
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
-use webauthn_rs::prelude::Passkey;
+use webauthn_rs::prelude::{AuthenticationResult, Passkey};
+
+/// Opaque, owner-bound verification snapshot. Not an authentication grant.
+/// Keep this on the daemon side and use its passkey to begin verification.
+pub struct AuthenticationSnapshot {
+    user: UserId,
+    key: Passkey,
+    record: Vec<u8>,
+}
+impl AuthenticationSnapshot {
+    pub fn passkey(&self) -> &Passkey {
+        &self.key
+    }
+}
 
 pub const RECORD_FORMAT: i64 = 1; // webauthn-rs 0.5.5 Passkey JSON, writer-normalized.
 pub const MAX_ACTIVE_CREDENTIALS: i64 = 16;
@@ -31,6 +44,70 @@ fn decode(id: &[u8], format: i64, bytes: &[u8]) -> Result<Passkey> {
     Ok(key)
 }
 impl Store {
+    /// Capture the exact active record used by a future verification ceremony.
+    pub fn authentication_snapshot(
+        &self,
+        user: UserId,
+        id: &[u8],
+    ) -> Result<Option<AuthenticationSnapshot>> {
+        self.credential_for_authentication(user, id)?
+            .map(|key| {
+                let record = encode(&key)?;
+                Ok(AuthenticationSnapshot { user, key, record })
+            })
+            .transpose()
+    }
+
+    /// Apply only the established verifier's metadata update, after rechecking
+    /// the owner, active status and exact verification snapshot in a transaction.
+    /// The caller must supply the genuine result for this snapshot's single-use,
+    /// purpose-bound ceremony. This API neither verifies assertions nor grants
+    /// action/session authority. A conflict requires a fresh ceremony, not retry.
+    /// Returns whether metadata changed; even a no-change result rechecks state.
+    pub fn commit_authentication(
+        &mut self,
+        snapshot: AuthenticationSnapshot,
+        result: &AuthenticationResult,
+    ) -> Result<bool> {
+        self.credentials_ready()?;
+        let mut key = snapshot.key;
+        let changed = key.update_credential(result).ok_or(Error::InvalidInput)?;
+        let record = encode(&key)?;
+        let outcome = (|| {
+            let tx = self
+                .connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let current: Option<(i64, Vec<u8>)> = tx.query_row(
+                "SELECT format,record FROM credentials WHERE id=?1 AND user_id=?2 AND revoked=0",
+                params![key.cred_id().as_ref(), snapshot.user.as_bytes().as_slice()],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            ).optional()?;
+            let Some((format, bytes)) = current else {
+                return Err(Error::Conflict);
+            };
+            decode(key.cred_id().as_ref(), format, &bytes)?;
+            if bytes != snapshot.record {
+                return Err(Error::Conflict);
+            }
+            if changed {
+                let rows = tx.execute(
+                    "UPDATE credentials SET record=?1 WHERE id=?2 AND user_id=?3 AND revoked=0",
+                    params![
+                        record,
+                        key.cred_id().as_ref(),
+                        snapshot.user.as_bytes().as_slice()
+                    ],
+                )?;
+                if rows != 1 {
+                    return Err(Error::InvalidStore);
+                }
+            }
+            tx.commit()?;
+            Ok(changed)
+        })();
+        self.credential_write_result(outcome)
+    }
+
     /// Includes retained revoked records; transient reservations are daemon-owned.
     pub fn remaining_credential_capacity(&self) -> Result<usize> {
         self.credentials_ready()?;

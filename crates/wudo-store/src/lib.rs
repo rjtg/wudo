@@ -8,7 +8,9 @@ mod administration;
 pub use administration::{CredentialSummary, Page};
 mod credentials;
 mod installation;
-pub use credentials::{MAX_ACTIVE_CREDENTIALS, MAX_CREDENTIALS, RECORD_FORMAT};
+pub use credentials::{
+    AuthenticationSnapshot, MAX_ACTIVE_CREDENTIALS, MAX_CREDENTIALS, RECORD_FORMAT,
+};
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 use std::{
