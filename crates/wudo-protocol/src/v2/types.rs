@@ -348,3 +348,11 @@ impl<'a, T: Wire<'a>> Wire<'a> for Items<T> {
         Ok(())
     }
 }
+
+map_struct!(ActionList<'a> {} optional { after: Name<'a> });
+map_struct!(GrantQuery<'a> { user_id: UserId } optional { after: Name<'a> });
+map_struct!(GrantRef<'a> { user_id: UserId, action_id: Name<'a> } optional {});
+map_struct!(ActionEntry<'a> { action_id: Name<'a>, description: Text<'a, 256>, revision: Blob<'a, 32, 32> } optional {});
+map_struct!(ActionPage<'a> { actions: Items<ActionEntry<'a>> } optional { next_after: Name<'a> });
+map_struct!(GrantPage<'a> { user_id: UserId, actions: Items<ActionEntry<'a>> } optional { next_after: Name<'a> });
+map_struct!(GrantChanged<'a> { user_id: UserId, action_id: Name<'a>, revision: Blob<'a, 32, 32>, granted: bool } optional {});

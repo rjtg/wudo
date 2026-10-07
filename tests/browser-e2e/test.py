@@ -1,7 +1,7 @@
 """Container-only test: real browser/UI/HTTPS/IPC, virtual CTAP2 authenticator.
 
 Never invoke this on the host: it provisions disposable container state.
-Verbose diagnostics include synthetic enrollment data; never use real credentials here.
+Opt-in debug diagnostics include synthetic enrollment data; never use real credentials here.
 """
 import os
 from pathlib import Path
@@ -12,11 +12,17 @@ import traceback
 
 from playwright.sync_api import expect, sync_playwright
 
+DEBUG = os.environ.get("WUDO_E2E_DEBUG") == "1"
 ORIGIN = "https://wudo.test"
 children = []
 stage = "container prerequisites"
 http_statuses = []
 create_outcome = "not-called"
+
+
+def debug(*args, **kwargs):
+    if DEBUG:
+        print(*args, **kwargs)
 
 
 def check(condition, label):
@@ -35,7 +41,7 @@ def command(args, **kwargs):
 def cli(*args):
     output = command(["wudo", *args])
     if args != ("status",):
-        print("CLI:", args, "\n" + output, flush=True)
+        debug("CLI:", args, "\n" + output, flush=True)
     return output
 
 
@@ -126,7 +132,7 @@ http {
                            "SecurityError", "InvalidStateError", "TypeError", "AbortError", "other-error",
                            "client-data-extra-fields", "client-data-standard-fields"}:
                 create_outcome = outcome
-                print("Browser credential creation:", outcome, flush=True)
+                debug("Browser credential creation:", outcome, flush=True)
         context.expose_function("e2eReportCreate", report_create)
         def report_shape(shape):
             # Whitelist names and scalar types; no arbitrary browser text.
@@ -137,7 +143,7 @@ http {
                 safe = {key: value for key, value in shape.items()
                         if (key in flags and type(value) is bool)
                         or (key in sizes and type(value) is int and 0 <= value <= 65536)}
-                print("Browser response shape:", safe, flush=True)
+                debug("Browser response shape:", safe, flush=True)
         context.expose_function("e2eReportShape", report_shape)
         # Test-only observation; the credential returned to the app is unchanged.
         context.add_init_script("""(() => {
@@ -149,9 +155,9 @@ http {
             try {
               const result = await original(...args);
               // Report only whether our current strict field allowlist matches.
-              // Original signed bytes are neither logged nor rewritten.
+              // Original signed bytes are never rewritten. Debug logs use synthetic data only.
               const data = JSON.parse(new TextDecoder().decode(result.response.clientDataJSON));
-              console.log("Synthetic clientDataJSON:", JSON.stringify(data));
+              if (__E2E_DEBUG__) console.log("Synthetic clientDataJSON:", JSON.stringify(data));
               void window.e2eReportShape({
                 credentialClass: result instanceof PublicKeyCredential,
                 responseClass: result.response instanceof AuthenticatorAttestationResponse,
@@ -179,20 +185,21 @@ http {
               throw error;
             }
           };
-        })();""")
+        })();""".replace("__E2E_DEBUG__", "true" if DEBUG else "false"))
         page = context.new_page()
-        page.on("pageerror", lambda error: print("Browser exception:", error, flush=True))
-        page.on("console", lambda message: print(f"Browser {message.type}: {message.text}", flush=True))
-        page.on("requestfailed", lambda request: print("Failed request:", request.url, request.failure, flush=True))
+        page.on("pageerror", lambda error: debug("Browser exception:", error, flush=True))
+        page.on("console", lambda message: debug(f"Browser {message.type}: {message.text}", flush=True))
+        page.on("requestfailed", lambda request: debug("Failed request:", request.url, request.failure, flush=True))
         def log_response(response):
             if response.url == ORIGIN + "/api/enroll":
                 try:
                     body = response.body()
-                    print("Enrollment response:", response.status, response.headers,
+                    debug("Enrollment response:", response.status, response.headers,
                           "CBOR hex:", body[:65536].hex(), flush=True)
                 except Exception as error:
-                    print("Response diagnostic failed:", error, flush=True)
-        page.on("response", log_response)
+                    debug("Response diagnostic failed:", error, flush=True)
+        if DEBUG:
+            page.on("response", log_response)
         page.on("response", lambda response: http_statuses.append(response.status)
                 if response.url == ORIGIN + "/api/enroll" else None)
         page.set_default_timeout(15000)
@@ -228,7 +235,7 @@ http {
         expect(page.locator("#status")).to_have_text(
             re.compile(r".*must inspect and approve.*|Enrollment did not complete.*"), timeout=15000)
         if page.locator("#status").inner_text().startswith("Enrollment did not complete"):
-            print("UI displayed credential identity:", bool(page.locator("#identity").inner_text()), flush=True)
+            debug("UI displayed credential identity:", bool(page.locator("#identity").inner_text()), flush=True)
             raise RuntimeError("UI rejected registration")
         check(True, "browser registration reached pending approval")
         stage = "reading browser credential identity"
@@ -277,9 +284,12 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as error:
-        print("Enrollment HTTP status codes:", http_statuses[:8])
-        print("Last browser credential outcome:", create_outcome)
-        traceback.print_exc()
+        debug("Enrollment HTTP status codes:", http_statuses[:8])
+        debug("Last browser credential outcome:", create_outcome)
+        if DEBUG:
+            traceback.print_exc()
+        else:
+            print("Rerun scripts/browser-e2e.py --debug for detailed diagnostics.")
         raise SystemExit("FAIL: " + stage) from None
     finally:
         for child in reversed(children):

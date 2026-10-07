@@ -92,6 +92,7 @@ identifier!(SecretId);
 
 #[derive(Debug)]
 pub struct Config {
+    source: Table,
     resources: BTreeMap<ResourceId, Resource>,
     actions: BTreeMap<ActionId, Action>,
 }
@@ -141,7 +142,11 @@ impl Config {
         }
         // toml 0.8's default parser recursion limit remains enabled. Never enable
         // toml_edit's unbounded feature. Raw parser errors must not escape.
-        let mut root: Table = text.parse().map_err(|_| error(ErrorKind::InvalidToml))?;
+        let root: Table = text.parse().map_err(|_| error(ErrorKind::InvalidToml))?;
+        Self::from_table(root)
+    }
+    fn from_table(mut root: Table) -> Result<Self> {
+        let source = root.clone();
         fields(&root, &["schema_version", "resources", "actions"])?;
         if integer(&mut root, "schema_version")? != 1 {
             return Err(error(ErrorKind::UnsupportedSchema));
@@ -268,7 +273,11 @@ impl Config {
                 },
             );
         }
-        Ok(Self { resources, actions })
+        Ok(Self {
+            source,
+            resources,
+            actions,
+        })
     }
 }
 fn fields(t: &Table, allowed: &[&str]) -> Result<()> {
@@ -328,4 +337,76 @@ fn unit(t: &mut Table) -> Result<String> {
         return Err(error(ErrorKind::InvalidValue));
     }
     Ok(unit)
+}
+
+/// Versioned canonical comparison data for a single complete capability.
+/// Not an executable command, authorization token, or client input.
+pub struct ActionDefinition {
+    pub id: String,
+    pub description: String,
+    pub bytes: Vec<u8>,
+}
+impl Config {
+    pub fn empty() -> Self {
+        Self::parse(b"schema_version=1\n[resources]\n[actions]\n")
+            .expect("static empty configuration")
+    }
+    pub fn definitions(&self) -> Result<Vec<ActionDefinition>> {
+        let mut definitions = Vec::with_capacity(self.actions.len());
+        for (id, action) in &self.actions {
+            let mut resources = serde_json::Map::new();
+            let reference = match (&action.operation, &action.prerequisite) {
+                (Operation::LuksUnlock { resource }, _)
+                | (_, Some(Prerequisite::LuksUnlocked { resource })) => Some(resource),
+                _ => None,
+            };
+            if let Some(resource) = reference {
+                let value = serde_json::to_value(&self.source["resources"][resource.as_str()])
+                    .map_err(|_| error(ErrorKind::InvalidSchema))?;
+                resources.insert(resource.as_str().into(), value);
+            }
+            let mut actions = serde_json::Map::new();
+            let value = serde_json::to_value(&self.source["actions"][id.as_str()])
+                .map_err(|_| error(ErrorKind::InvalidSchema))?;
+            actions.insert(id.as_str().into(), value);
+            let value = serde_json::json!({"format":1,"config":{"schema_version":1,"resources":resources,"actions":actions}});
+            let bytes = serde_json::to_vec(&value).map_err(|_| error(ErrorKind::InvalidSchema))?;
+            if bytes.len() > 4096 {
+                return Err(error(ErrorKind::InputTooLarge));
+            }
+            definitions.push(ActionDefinition {
+                id: id.as_str().into(),
+                description: action.description.clone(),
+                bytes,
+            });
+        }
+        Ok(definitions)
+    }
+}
+impl ActionDefinition {
+    /// Revalidate exact canonical bytes on store open. Reject alternate encodings,
+    /// duplicate keys, extra resources/actions and unknown format versions.
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        if bytes.is_empty() || bytes.len() > 4096 {
+            return Err(error(ErrorKind::InputTooLarge));
+        }
+        let value: serde_json::Value =
+            serde_json::from_slice(bytes).map_err(|_| error(ErrorKind::InvalidSchema))?;
+        if value.get("format") != Some(&serde_json::json!(1))
+            || value.as_object().is_none_or(|v| v.len() != 2)
+        {
+            return Err(error(ErrorKind::InvalidSchema));
+        }
+        let table: Table = serde_json::from_value(value["config"].clone())
+            .map_err(|_| error(ErrorKind::InvalidSchema))?;
+        let mut definitions = Config::from_table(table)?.definitions()?;
+        if definitions.len() != 1 {
+            return Err(error(ErrorKind::InvalidSchema));
+        }
+        let definition = definitions.remove(0);
+        if definition.bytes != bytes {
+            return Err(error(ErrorKind::InvalidSchema));
+        }
+        Ok(definition)
+    }
 }

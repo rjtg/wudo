@@ -455,3 +455,12 @@ The daemon uses the same typed projection exercised by synthetic signed IPC
 fixtures. Browser UI and real-device compatibility remain pending. Additional
 root-only initialization/reset operations and their wire contracts are recorded
 in [installation setup](installation-setup.md); action handlers remain disabled.
+
+
+## Root-managed action grants
+
+The approved [action/grant contract](action-grants-proposal.md#administrative-wire-schemas)
+adds admin-only v2 action.list, grant.create, grant.revoke and grant.list with
+bounded pages and responses bound to the request. These handlers establish
+configuration/authorization state only. action.begin and action.finish remain
+reserved pending the execution/admission/outcome contract.

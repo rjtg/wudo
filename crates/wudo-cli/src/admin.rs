@@ -46,7 +46,7 @@ pub(super) fn run(command: &str, args: impl Iterator<Item = OsString>) -> ExitCo
                 return ExitCode::from(2);
             }
             eprint!(
-                "Reset deletes all Wudo users, credentials and settings. External resources and action files remain. Type RESET to continue: "
+                "Reset deletes all Wudo users, credentials, grants and settings. External resources and action files remain. Type RESET to continue: "
             );
             if io::stderr().flush().is_err() {
                 return ExitCode::FAILURE;

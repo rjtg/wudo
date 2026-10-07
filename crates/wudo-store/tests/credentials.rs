@@ -59,7 +59,10 @@ fn v1_requires_explicit_upgrade_and_preserves_users() {
     assert!(!store.needs_upgrade().unwrap());
     assert!(store.user_by_name("alice").unwrap().is_some());
     drop(store);
-    assert_eq!(Store::schema_version(dir.path()).unwrap(), 3);
+    assert_eq!(
+        Store::schema_version(dir.path()).unwrap(),
+        wudo_store::SCHEMA_VERSION
+    );
     assert!(Store::upgrade(dir.path()).is_ok());
 }
 #[test]

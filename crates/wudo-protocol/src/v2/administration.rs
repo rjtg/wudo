@@ -2,7 +2,51 @@
 use super::*;
 
 pub(super) fn response<'a>(body: &'a [u8], request: &Request<'_>) -> Result<Response<'a>> {
+    fn page(
+        entries: &[ActionEntry<'_>],
+        after: Option<Name<'_>>,
+        next: Option<Name<'_>>,
+    ) -> Result<()> {
+        let mut previous = after.map(|v| v.0).unwrap_or("");
+        for e in entries {
+            if e.action_id.0 <= previous
+                || e.description.0.trim().is_empty()
+                || e.description.0.chars().any(char::is_control)
+            {
+                return Err(Error::InvalidRequest);
+            }
+            previous = e.action_id.0;
+        }
+        if next.is_some_and(|n| entries.len() != 16 || n.0 != previous) {
+            return Err(Error::InvalidRequest);
+        }
+        Ok(())
+    }
     match request {
+        Request::ActionList(q) => {
+            let p = ActionPage::read(body)?;
+            page(&p.actions.0, q.after, p.next_after)?;
+            Ok(Response::ActionPage(p))
+        }
+        Request::GrantList(q) => {
+            let p = GrantPage::read(body)?;
+            if p.user_id != q.user_id {
+                return Err(Error::InvalidRequest);
+            }
+            page(&p.actions.0, q.after, p.next_after)?;
+            Ok(Response::GrantPage(p))
+        }
+        Request::GrantCreate(q) | Request::GrantRevoke(q) => {
+            let p = GrantChanged::read(body)?;
+            if p.user_id != q.user_id
+                || p.action_id != q.action_id
+                || p.granted != matches!(request, Request::GrantCreate(_))
+            {
+                return Err(Error::InvalidRequest);
+            }
+            Ok(Response::GrantChanged(p))
+        }
+
         Request::UserList(q) => {
             let p = UserPage::read(body)?;
             let mut previous = q.after.map(|n| n.0).unwrap_or("");

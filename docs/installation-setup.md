@@ -107,7 +107,8 @@ same `{origin}` body/caps as initialization. Kernel root identity and endpoint
 policy establish authority; CLI confirmation is a local safeguard, not a
 browser-provided authorization claim.
 
-Reset deletes every stored user and active/revoked credential and replaces the
+Reset deletes every stored user, active/revoked credential, grant and catalog
+entry, and replaces the
 origin in one SQLite transaction. Pending opportunities/candidates are discarded
 before the transaction, even if it fails. Late verifier results cannot activate
 across reset, including a reset to the same origin. Worker capacity remains held
@@ -116,8 +117,10 @@ rolls back persistent changes and storage failures require restart/inspection.
 This is logical deletion, not guaranteed forensic erasure from the storage medium.
 
 Action configuration files, system services, disks, LUKS keyslots and recovery
-passphrases are untouched. Grants and secret wrappers are not yet implemented;
-future schemas must explicitly extend reset semantics before supporting them.
+passphrases are untouched. The daemon restores its already-loaded action catalog
+with no grants before reporting success; a reconciliation failure requires
+restart/inspection and does not restore deleted identities. Secret wrappers are
+not yet implemented; future schemas must extend reset semantics for them.
 Deletion of wrappers may remove Wudo-mediated access but never substitutes for
 rotating a leaked downstream key. Reset does not bypass schema/filesystem
 validation: upgrade known old layouts first; corrupt/unsafe stores require local

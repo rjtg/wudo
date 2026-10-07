@@ -1,0 +1,2 @@
+CREATE TABLE actions (id TEXT PRIMARY KEY NOT NULL, revision BLOB NOT NULL UNIQUE CHECK(length(revision)=32), definition BLOB NOT NULL CHECK(length(definition) BETWEEN 1 AND 4096), UNIQUE(id,revision)) STRICT;
+CREATE TABLE grants (user_id BLOB NOT NULL REFERENCES users(id), action_id TEXT NOT NULL, revision BLOB NOT NULL CHECK(length(revision)=32), PRIMARY KEY(user_id,action_id), FOREIGN KEY(action_id,revision) REFERENCES actions(id,revision) ON DELETE CASCADE) STRICT;

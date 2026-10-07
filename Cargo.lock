@@ -1766,6 +1766,7 @@ dependencies = [
 name = "wudo-core"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "toml",
 ]
 
@@ -1791,6 +1792,7 @@ dependencies = [
  "tempfile",
  "webauthn-authenticator-rs",
  "webauthn-rs",
+ "wudo-core",
  "wudo-protocol",
 ]
 
@@ -1835,6 +1837,7 @@ dependencies = [
  "webauthn-authenticator-rs",
  "webauthn-rs",
  "webauthn-rs-proto",
+ "wudo-core",
  "wudo-protocol",
  "wudo-store",
 ]

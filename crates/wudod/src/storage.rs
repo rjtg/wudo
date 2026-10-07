@@ -1,4 +1,5 @@
 //! One bounded worker owns SQLite. A started transaction outlives its requester.
+mod actions;
 mod administration;
 use std::{
     path::PathBuf,
@@ -92,7 +93,15 @@ impl Client {
     }
 }
 impl Worker {
+    #[cfg(test)]
     pub(crate) fn start(path: PathBuf, anchor: Option<std::os::fd::OwnedFd>) -> Result<Self, ()> {
+        Self::start_configured(path, anchor, wudo_core::config::Config::empty())
+    }
+    pub(crate) fn start_configured(
+        path: PathBuf,
+        anchor: Option<std::os::fd::OwnedFd>,
+        catalog: wudo_core::config::Config,
+    ) -> Result<Self, ()> {
         let (tx, mut rx) = mpsc::channel::<Job>(4);
         let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
         let stop = Arc::new(AtomicBool::new(false));
@@ -116,6 +125,16 @@ impl Worker {
                         return;
                     }
                 };
+                if let Some(s) = store.as_mut() {
+                    match s.needs_upgrade() {
+                        Ok(true) => {}
+                        Ok(false) if s.reconcile_actions(&catalog).is_ok() => {}
+                        _ => {
+                            let _ = ready_tx.send(Err(()));
+                            return;
+                        }
+                    }
+                }
                 let mut enrollment = None;
                 let mut crypto: Vec<thread::JoinHandle<()>> = Vec::new();
                 let _ = ready_tx.send(Ok(()));
@@ -218,7 +237,24 @@ impl Worker {
                             Ok(None) => {}
                         }
                     }
-                    let result = dispatch(job.command, &path, &mut store, &mut enrollment);
+                    let refresh = matches!(
+                        &job.command,
+                        Command::Initialize
+                            | Command::Upgrade
+                            | Command::Configure(_)
+                            | Command::Reset(_)
+                    );
+                    let result = dispatch(job.command, &path, &mut store, &mut enrollment)
+                        .and_then(|reply| {
+                            if refresh {
+                                store
+                                    .as_mut()
+                                    .ok_or(Error::InternalError)?
+                                    .reconcile_actions(&catalog)
+                                    .map_err(map_error)?;
+                            }
+                            Ok(reply)
+                        });
                     if matches!(result, Err(Error::InternalError)) {
                         failed = true;
                     }
@@ -413,7 +449,7 @@ pub(crate) fn production() -> Result<Worker, ()> {
     // SQLite NOFOLLOW rejects procfs descriptor aliases. All ancestors of this
     // fixed path were validated; root is trusted not to replace them.
     let path = PathBuf::from("/var/lib/wudo");
-    Worker::start(path, Some(fd))
+    Worker::start_configured(path, Some(fd), actions::production()?)
 }
 fn check_directory(fd: &std::os::fd::OwnedFd, leaf: bool) -> Result<(), ()> {
     use rustix::{fs, io::Errno};

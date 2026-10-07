@@ -12,7 +12,8 @@ store. SQLite owns transaction locking, journaling, commit and crash recovery.
 The user approved a smaller first slice: explicit database initialization,
 schema validation, transactional user creation and lookup, with restart tests.
 The earlier snapshot protocol and configuration-wide grant invalidation proposal
-are not adopted by this change. Grant semantics remain a separate review.
+are not adopted by this change. Per-action grant binding is now covered by the approved
+[action/grant contract](action-grants-proposal.md).
 
 `wudo-store` is a synchronous workspace crate. The approved
 [administration slice](user-administration-proposal.md) integrates it through
@@ -30,7 +31,7 @@ No ORM, pool, extension loading, SQL scripts from clients or configurable VFS.
 - Explicit `initialize(directory)` creates `identity.sqlite3` exclusively.
   Existing files are never overwritten, migrated, repaired or reset.
 - `open(directory)` requires an existing database with Wudo application ID
-  `0x5755444f`, schema version 3, and the exact expected schema. Unknown versions,
+  `0x5755444f`, schema version 4, and the exact expected schema. Unknown versions,
   extra tables/views/triggers and invalid persisted users fail closed.
 - The users STRICT table contains a 16-byte UUIDv4 user ID, unique name and label.
   IDs come from the OS random source and are generated inside `create_user`.
@@ -40,7 +41,7 @@ No ORM, pool, extension loading, SQL scripts from clients or configurable VFS.
   transaction for uniqueness/capacity checks and insertion. Return success only
   after commit. UUID collisions fail rather than replacing another identity.
 - Look up by typed ID or validated name. Absence is distinct from a storage
-  failure. No grant, user disable, deletion or rename operation exists.
+  failure. No user disable, deletion or rename operation exists.
   Creating a user confers no permissions.
 - Errors are fixed categories without source errors, SQL, paths or user values.
   User records and IDs deliberately do not implement Debug.
@@ -97,8 +98,8 @@ The [local user administration contract](user-administration-proposal.md)
 implements initialize/upgrade/create/show, root-only dispatch, production path
 checks and a bounded worker lifecycle.
 
-- Enrollment integration, credential metadata updates after authentication, grant
-  binding, RP/origin binding and local recovery policy remain separate work.
+- Enrollment, RP/origin binding and local recovery are implemented. Credential
+  metadata updates after authentication remain separate work.
 - Pending ceremonies, tickets and candidates remain memory-only and never belong
   in the database; restart invalidates them under the accepted ceremony policy.
 
@@ -137,9 +138,9 @@ introduce a record migration when necessary. No private authenticator key or
 plaintext downstream secret is stored. The dependency uses OpenSSL; workspace
 CI installs its native build prerequisites.
 
-Initialization now creates schema v3 (including installation settings). Valid v1/v2 stores remain maintenance-only until
-explicit `wudo upgrade`, which preserves users and adds the empty credential
-table transactionally. Historical schemas are validated before migration.
+Initialization now creates schema v4 (including settings, actions and grants). Valid v1/v2/v3 stores remain maintenance-only until
+explicit `wudo upgrade`, which preserves users/credentials/settings and adds
+missing tables transactionally. Historical schemas are validated before migration.
 Tests cover a genuine verified credential surviving restart and verifying an
 assertion, owner isolation, duplicate IDs, terminal revocation, capacity,
 corrupt/incompatible records, and v1-to-v2 preservation.
@@ -154,3 +155,17 @@ See [installation setup](installation-setup.md) for the root-only init command,
 canonical HTTPS origin validation, singleton storage and the explicit upgrade
 path. Upgrade never invents an origin. Existing unbound credentials prevent
 configuration; users alone can be preserved while configuring an upgraded store.
+
+
+## Action catalog and grants (schema v4)
+
+The [approved action/grant contract](action-grants-proposal.md) adds STRICT
+`actions` and `grants` tables. Actions store canonical definitions (format 1,
+maximum 4096 bytes) and random 32-byte revisions. Grants bind a user to an action
+and its current revision through foreign keys. Startup reconciliation is atomic;
+changed/removed actions cascade deletion of their grants. At most 128 actions
+and 8192 grants (128 per user) fit within the existing 4 MiB physical ceiling.
+Opening validates exact schemas, bounded canonical definitions, revision lengths
+and all grant references. Reconciliation and mutation failures fail closed.
+Reset deletes grants and catalog entries in the identity-reset transaction;
+the daemon then reconciles its startup snapshot before returning success.

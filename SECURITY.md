@@ -270,3 +270,14 @@ retain their existing checks. Cross-origin ceremonies, topOrigin and tokenBindin
 remain unsupported. The verifier receives the original bytes without stripping
 or reserializing additional fields and independently verifies challenge/origin
 and cryptographic material.
+
+
+## Trusted action catalog and grant revisions
+
+The approved [action/grant contract](docs/action-grants-proposal.md) loads
+`/etc/wudo/actions.toml` only at daemon startup through checked root-owned paths.
+Root alone manages grants. Grants bind to the complete action definition and
+referenced resource through a persisted revision; changes, removal, or missing
+configuration delete affected grants. Invalid configuration fails startup.
+Enrolling a passkey creates no grant. These administrative handlers do not yet
+enable action authentication or execution.

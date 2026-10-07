@@ -41,8 +41,8 @@ it accesses only this test application. This is a test appliance, not a Wudo
 deployment image. The web service still runs without root or supplementary
 groups, and production IPC peer checks remain enabled.
 
-Failures report the current stage and full exception traceback. Verbose diagnostics
-include CLI output, synthetic enrollment tickets, browser console/errors,
+Failures report the current stage. With `--debug`, full exception tracebacks
+and verbose diagnostics include CLI output, synthetic enrollment tickets, browser console/errors,
 client-data JSON, enrollment response CBOR in hexadecimal, and service output.
 This logging is explicitly intended for the isolated, freshly generated test
 identities; it does not change production logging. Original WebAuthn bytes are
@@ -52,3 +52,14 @@ validated by this test. Real-device checks remain necessary.
 
 References: [Playwright browser launch](https://playwright.dev/docs/api/class-browsertype#browser-type-launch),
 [Chromium virtual authenticator API](https://chromedevtools.github.io/devtools-protocol/tot/WebAuthn/).
+
+
+Normal runs show pass/fail progress. To include CLI transcripts, synthetic
+WebAuthn data, HTTP headers/CBOR payloads and failure tracebacks, opt in:
+
+```sh
+python3 scripts/browser-e2e.py --debug
+```
+
+The runner explicitly forwards this option to the disposable container as
+`WUDO_E2E_DEBUG=1`; ordinary runs set it to `0`.

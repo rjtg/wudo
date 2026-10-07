@@ -162,6 +162,10 @@ fn checked(bytes: &[u8]) -> Result<Fields<'_>> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Operation {
+    GrantRevoke,
+    GrantCreate,
+    GrantList,
+    ActionList,
     Status,
     InstallationInitialize,
     InstallationReset,
@@ -187,7 +191,11 @@ impl Operation {
     pub fn allowed(self, endpoint: Endpoint) -> bool {
         match self {
             Self::Status => true,
-            Self::InstallationReset
+            Self::ActionList
+            | Self::GrantList
+            | Self::GrantCreate
+            | Self::GrantRevoke
+            | Self::InstallationReset
             | Self::InstallationInitialize
             | Self::StoreInitialize
             | Self::StoreUpgrade
@@ -213,7 +221,7 @@ impl Operation {
     }
     pub fn response_limit(self) -> usize {
         match self {
-            Self::UserList => 8192,
+            Self::UserList | Self::ActionList | Self::GrantList => 8192,
             Self::CredentialList => 32768,
             Self::RegistrationBegin | Self::RegistrationBeginInsecure | Self::ActionBegin => {
                 MAX_PAYLOAD
@@ -223,6 +231,10 @@ impl Operation {
     }
     fn name(self) -> &'static str {
         match self {
+            Self::ActionList => "action.list",
+            Self::GrantList => "grant.list",
+            Self::GrantCreate => "grant.create",
+            Self::GrantRevoke => "grant.revoke",
             Self::Status => "status",
             Self::StoreInitialize => "store.initialize",
             Self::InstallationInitialize => "installation.initialize",
@@ -247,6 +259,10 @@ impl Operation {
     }
     fn parse(s: &str) -> Result<Self> {
         [
+            Self::ActionList,
+            Self::GrantList,
+            Self::GrantCreate,
+            Self::GrantRevoke,
             Self::Status,
             Self::StoreInitialize,
             Self::InstallationInitialize,
@@ -278,6 +294,10 @@ impl Operation {
 // must not become diagnostics through a derived formatter.
 #[derive(Clone, PartialEq, Eq)]
 pub enum Request<'a> {
+    GrantRevoke(GrantRef<'a>),
+    GrantCreate(GrantRef<'a>),
+    GrantList(GrantQuery<'a>),
+    ActionList(ActionList<'a>),
     Status,
     InstallationInitialize(InstallationInitialize<'a>),
     InstallationReset(InstallationInitialize<'a>),
@@ -302,6 +322,10 @@ pub enum Request<'a> {
 impl Request<'_> {
     pub fn operation(&self) -> Operation {
         match self {
+            Self::ActionList(_) => Operation::ActionList,
+            Self::GrantList(_) => Operation::GrantList,
+            Self::GrantCreate(_) => Operation::GrantCreate,
+            Self::GrantRevoke(_) => Operation::GrantRevoke,
             Self::Status => Operation::Status,
             Self::StoreInitialize => Operation::StoreInitialize,
             Self::InstallationInitialize(_) => Operation::InstallationInitialize,
@@ -364,6 +388,10 @@ pub fn decode_request(bytes: &[u8], endpoint: Endpoint) -> Result<Request<'_>> {
         Operation::InstallationInitialize => {
             Request::InstallationInitialize(InstallationInitialize::read(body)?)
         }
+        Operation::ActionList => Request::ActionList(ActionList::read(body)?),
+        Operation::GrantList => Request::GrantList(GrantQuery::read(body)?),
+        Operation::GrantCreate => Request::GrantCreate(GrantRef::read(body)?),
+        Operation::GrantRevoke => Request::GrantRevoke(GrantRef::read(body)?),
         Operation::UserList => Request::UserList(UserList::read(body)?),
         Operation::CredentialList => Request::CredentialList(CredentialQuery::read(body)?),
         Operation::CredentialInspect => Request::CredentialInspect(CredentialRef::read(body)?),
@@ -417,6 +445,10 @@ pub fn encode_request(out: &mut [u8], request: &Request<'_>, endpoint: Endpoint)
             e.map(0)?;
         }
         Request::InstallationInitialize(v) | Request::InstallationReset(v) => v.write(&mut e)?,
+        Request::ActionList(v) => v.write(&mut e)?,
+        Request::GrantList(v) => v.write(&mut e)?,
+        Request::GrantCreate(v) => v.write(&mut e)?,
+        Request::GrantRevoke(v) => v.write(&mut e)?,
         Request::UserList(v) => v.write(&mut e)?,
         Request::CredentialList(v) => v.write(&mut e)?,
         Request::CredentialInspect(v) => v.write(&mut e)?,
@@ -438,6 +470,9 @@ pub fn encode_request(out: &mut [u8], request: &Request<'_>, endpoint: Endpoint)
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum Response<'a> {
+    GrantChanged(GrantChanged<'a>),
+    GrantPage(GrantPage<'a>),
+    ActionPage(ActionPage<'a>),
     Status(StatusResult),
     StoreReady(StoreReady),
     UserPage(UserPage<'a>),
@@ -522,7 +557,11 @@ pub fn decode_response<'a>(
         | Request::StoreUpgrade
         | Request::InstallationInitialize(_)
         | Request::InstallationReset(_) => Response::StoreReady(StoreReady::read(body)?),
-        Request::UserList(_)
+        Request::ActionList(_)
+        | Request::GrantList(_)
+        | Request::GrantCreate(_)
+        | Request::GrantRevoke(_)
+        | Request::UserList(_)
         | Request::CredentialList(_)
         | Request::CredentialInspect(_)
         | Request::CredentialRevoke(_) => administration::response(body, request)?,
@@ -594,6 +633,9 @@ pub fn encode_response(
         match response {
             Response::Status(v) => v.write(&mut e)?,
             Response::StoreReady(v) => v.write(&mut e)?,
+            Response::ActionPage(v) => v.write(&mut e)?,
+            Response::GrantPage(v) => v.write(&mut e)?,
+            Response::GrantChanged(v) => v.write(&mut e)?,
             Response::UserPage(v) => v.write(&mut e)?,
             Response::CredentialPage(v) => v.write(&mut e)?,
             Response::CredentialInfo(v) => v.write(&mut e)?,

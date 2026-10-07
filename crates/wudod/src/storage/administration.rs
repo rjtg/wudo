@@ -19,6 +19,40 @@ pub(super) fn request(store: &mut Store, bytes: &[u8]) -> Result<Reply, Error> {
         Ok(Reply::Encoded(out))
     };
     match &q {
+        v::Request::ActionList(query) => {
+            let p = store
+                .list_actions(query.after.map(|v| v.0))
+                .map_err(map_error)?;
+            encode(v::Response::ActionPage(v::ActionPage {
+                actions: v::Items(action_entries(&p.items)),
+                next_after: p.next_after.as_deref().map(v::Name),
+            }))
+        }
+        v::Request::GrantList(query) => {
+            let p = store
+                .list_grants(user(query.user_id)?, query.after.map(|v| v.0))
+                .map_err(map_error)?
+                .ok_or(Error::Unavailable)?;
+            encode(v::Response::GrantPage(v::GrantPage {
+                user_id: query.user_id,
+                actions: v::Items(action_entries(&p.items)),
+                next_after: p.next_after.as_deref().map(v::Name),
+            }))
+        }
+        v::Request::GrantCreate(query) | v::Request::GrantRevoke(query) => {
+            let granted = matches!(q, v::Request::GrantCreate(_));
+            let revision = store
+                .set_grant(user(query.user_id)?, query.action_id.0, granted)
+                .map_err(map_error)?
+                .ok_or(Error::Unavailable)?;
+            encode(v::Response::GrantChanged(v::GrantChanged {
+                user_id: query.user_id,
+                action_id: query.action_id,
+                revision: v::Blob(&revision),
+                granted,
+            }))
+        }
+
         v::Request::UserList(q) => {
             let p = store.list_users(q.after.map(|n| n.0)).map_err(map_error)?;
             encode(v::Response::UserPage(v::UserPage {
@@ -79,4 +113,15 @@ pub(super) fn request(store: &mut Store, bytes: &[u8]) -> Result<Reply, Error> {
         }
         _ => Err(Error::UnsupportedOperation),
     }
+}
+
+fn action_entries(items: &[wudo_store::ActionSummary]) -> Vec<v::ActionEntry<'_>> {
+    items
+        .iter()
+        .map(|a| v::ActionEntry {
+            action_id: v::Name(&a.id),
+            description: v::Text(&a.description),
+            revision: v::Blob(&a.revision),
+        })
+        .collect()
 }

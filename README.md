@@ -83,6 +83,12 @@ and serves the Rust/WASM UI. Privileged actions and secret transport are not
 implemented yet. See [browser enrollment](docs/browser-enrollment.md) for build,
 proxy setup, enrollment and remaining real-device validation.
 
+Root-managed action configuration and grants are described in the
+[action/grant guide](docs/action-grants-proposal.md). This adds `wudo action list`,
+`wudo grant USER ACTION`, `wudo revoke USER ACTION` and `wudo grant list USER`.
+Existing installations require `sudo wudo upgrade` for schema 4. Configuration
+changes take effect at restart and invalidate grants for changed actions.
+
 Local setup and enrollment commands are documented in
 [installation setup](docs/installation-setup.md) and
 [enrollment](docs/enrollment-implementation.md). `wudo init --reset` is explicitly
@@ -141,4 +147,4 @@ Reviewed architecture/security decisions remain in the repository documents.
 
 The [offline configuration contract](docs/configuration-proposal.md) and
 [Paperless TOML example](examples/paperless.actions.toml) describe schema v1.
-Privileged runtime behavior remains unimplemented.
+Trusted startup loading and local grants are implemented; action execution remains unimplemented.

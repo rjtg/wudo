@@ -74,6 +74,10 @@ async fn exchange_with_store(
                         Some(Command::Create(v.name.0.into(), v.label.0.into()))
                     }
                     v2::Request::UserList(_)
+                    | v2::Request::ActionList(_)
+                    | v2::Request::GrantList(_)
+                    | v2::Request::GrantCreate(_)
+                    | v2::Request::GrantRevoke(_)
                     | v2::Request::CredentialList(_)
                     | v2::Request::CredentialInspect(_)
                     | v2::Request::CredentialRevoke(_) => {
@@ -436,6 +440,111 @@ mod administration_tests {
             result.unwrap();
         }
         reply
+    }
+    #[test]
+    fn old_schema_admits_upgrade_then_reconciles_startup_catalog() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut store = wudo_store::Store::initialize(dir.path()).unwrap();
+        store.configure_installation("https://pi.lan").unwrap();
+        drop(store);
+        let db = rusqlite::Connection::open(dir.path().join("identity.sqlite3")).unwrap();
+        db.execute_batch("DROP TABLE grants; DROP TABLE actions; PRAGMA user_version=3;")
+            .unwrap();
+        drop(db);
+        let config = wudo_core::config::Config::parse(include_bytes!(
+            "../../../examples/paperless.actions.toml"
+        ))
+        .unwrap();
+        let worker =
+            crate::storage::Worker::start_configured(dir.path().into(), None, config).unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let q = v::Request::ActionList(v::ActionList { after: None });
+            let bytes = call(&q, v::Endpoint::Admin, worker.client()).await;
+            assert!(matches!(v::decode_response(&bytes[4..], &q, v::Endpoint::Admin).unwrap(), v::Response::Error(v::Error::Unavailable)));
+            let upgrade = v::Request::StoreUpgrade;
+            let bytes = call(&upgrade, v::Endpoint::Admin, worker.client()).await;
+            assert!(!matches!(v::decode_response(&bytes[4..], &upgrade, v::Endpoint::Admin).unwrap(), v::Response::Error(_)));
+            let bytes = call(&q, v::Endpoint::Admin, worker.client()).await;
+            assert!(matches!(v::decode_response(&bytes[4..], &q, v::Endpoint::Admin).unwrap(), v::Response::ActionPage(p) if p.actions.0.len() == 3));
+        });
+    }
+    #[test]
+    fn configured_grants_reconcile_restart_and_reset_over_ipc() {
+        use crate::storage::Worker;
+        use wudo_core::config::Config;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let source = include_str!("../../../examples/paperless.actions.toml");
+        let catalog = || Config::parse(source.as_bytes()).unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let worker = Worker::start_configured(dir.path().into(), None, catalog()).unwrap();
+        let user = rt.block_on(async {
+            for req in [
+                v::Request::InstallationInitialize(v::InstallationInitialize { origin: v::Text("https://pi.lan") }),
+                v::Request::UserCreate(v::UserCreate { name: v::Name("alice"), label: v::Label("Alice") }),
+            ] {
+                let bytes = call(&req, v::Endpoint::Admin, worker.client()).await;
+                assert!(!matches!(v::decode_response(&bytes[4..], &req, v::Endpoint::Admin).unwrap(), v::Response::Error(_)));
+            }
+            let q = v::Request::UserInspect(v::UserInspect { name: v::Name("alice") });
+            let bytes = call(&q, v::Endpoint::Admin, worker.client()).await;
+            let v::Response::UserInfo(u) = v::decode_response(&bytes[4..], &q, v::Endpoint::Admin).unwrap() else { panic!("user") };
+            let user = u.user_id;
+            for q in [
+                v::Request::ActionList(v::ActionList { after: None }),
+                v::Request::GrantList(v::GrantQuery { user_id: user, after: None }),
+                v::Request::GrantCreate(v::GrantRef { user_id: user, action_id: v::Name("paperless.start") }),
+                v::Request::GrantRevoke(v::GrantRef { user_id: user, action_id: v::Name("paperless.start") }),
+            ] { call(&q, v::Endpoint::Web, worker.client()).await; }
+            let q = v::Request::GrantList(v::GrantQuery { user_id: user, after: None });
+            let bytes = call(&q, v::Endpoint::Admin, worker.client()).await;
+            assert!(matches!(v::decode_response(&bytes[4..], &q, v::Endpoint::Admin).unwrap(), v::Response::GrantPage(p) if p.actions.0.is_empty()));
+            for action in ["paperless.start", "missing"] {
+                let q = v::Request::GrantCreate(v::GrantRef { user_id: user, action_id: v::Name(action) });
+                let bytes = call(&q, v::Endpoint::Admin, worker.client()).await;
+                let response = v::decode_response(&bytes[4..], &q, v::Endpoint::Admin).unwrap();
+                if action == "missing" { assert!(matches!(response, v::Response::Error(v::Error::Unavailable))); }
+                else { assert!(matches!(response, v::Response::GrantChanged(g) if g.granted)); }
+            }
+            user
+        });
+        drop(worker);
+        for (text, expected) in [
+            (source.to_owned(), 1),
+            (source.replace("paperless.service", "changed.service"), 0),
+        ] {
+            let worker = Worker::start_configured(
+                dir.path().into(),
+                None,
+                Config::parse(text.as_bytes()).unwrap(),
+            )
+            .unwrap();
+            rt.block_on(async {
+                let q = v::Request::GrantList(v::GrantQuery { user_id: user, after: None });
+                let bytes = call(&q, v::Endpoint::Admin, worker.client()).await;
+                assert!(matches!(v::decode_response(&bytes[4..], &q, v::Endpoint::Admin).unwrap(), v::Response::GrantPage(p) if p.actions.0.len() == expected));
+            });
+        }
+        let worker = Worker::start_configured(dir.path().into(), None, catalog()).unwrap();
+        rt.block_on(async {
+            let q = v::Request::InstallationReset(v::InstallationInitialize { origin: v::Text("https://pi.lan") });
+            let bytes = call(&q, v::Endpoint::Admin, worker.client()).await;
+            assert!(!matches!(v::decode_response(&bytes[4..], &q, v::Endpoint::Admin).unwrap(), v::Response::Error(_)));
+            let q = v::Request::ActionList(v::ActionList { after: None });
+            let bytes = call(&q, v::Endpoint::Admin, worker.client()).await;
+            assert!(matches!(v::decode_response(&bytes[4..], &q, v::Endpoint::Admin).unwrap(), v::Response::ActionPage(p) if p.actions.0.len() == 3));
+            let q = v::Request::GrantList(v::GrantQuery { user_id: user, after: None });
+            let bytes = call(&q, v::Endpoint::Admin, worker.client()).await;
+            assert!(matches!(v::decode_response(&bytes[4..], &q, v::Endpoint::Admin).unwrap(), v::Response::Error(v::Error::Unavailable)));
+        });
     }
     #[test]
     fn administrative_roundtrip_and_restart_reject_web_operations() {

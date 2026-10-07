@@ -2,7 +2,7 @@
 """Linux deployment smoke test; builds matching workspace binaries first.
 
 Usage: python3 scripts/ipc-smoke.py
-Prompts through sudo, then uses a private mount namespace and temporary /run and /var/lib.
+Prompts through sudo, then uses a private mount namespace and temporary /etc, /run and /var/lib.
 No accounts are created. Numeric test identities exist only in child processes.
 """
 import os
@@ -81,6 +81,13 @@ def isolated(original_namespace):
     subprocess.run(["mount", "--make-rprivate", "/"], check=True)
     subprocess.run(["mount", "-t", "tmpfs", "-o", "mode=0755", "tmpfs", "/run"], check=True)
     subprocess.run(["mount", "-t", "tmpfs", "-o", "mode=0755", "tmpfs", "/var/lib"], check=True)
+    subprocess.run(["mount", "-t", "tmpfs", "-o", "mode=0755", "tmpfs", "/etc"], check=True)
+    config_directory = Path("/etc/wudo")
+    config_directory.mkdir(mode=0o755)
+    config_directory.chmod(0o755)
+    config_file = config_directory / "actions.toml"
+    config_file.write_text((ROOT / "examples/paperless.actions.toml").read_text())
+    config_file.chmod(0o644)
     state_directory = Path("/var/lib/wudo")
     state_directory.mkdir(mode=0o700)
     state_directory.chmod(0o700)
@@ -121,6 +128,20 @@ def isolated(original_namespace):
                 result = subprocess.run([str(CLI), "credential", action, "alice", "00"], capture_output=True, text=True, timeout=6)
                 check(result.returncode == 1 and "Unavailable" in result.stderr,
                       "missing credential " + action + " fails closed")
+            result = subprocess.run([str(CLI), "action", "list"], capture_output=True, text=True, timeout=6)
+            check_cli(result, "trusted startup action catalog")
+            check("paperless.start" in result.stdout, "configured action is listed")
+            result = subprocess.run([str(CLI), "grant", "list", "alice"], capture_output=True, text=True, timeout=6)
+            check_cli(result, "local grant listing")
+            check(("paperless.start" in result.stdout) == (stop_signal == signal.SIGINT),
+                  "grant persistence across daemon restart")
+            for verb in ["grant", "grant", "revoke", "revoke"]:
+                result = subprocess.run([str(CLI), verb, "alice", "paperless.start"], capture_output=True, text=True, timeout=6)
+                check_cli(result, "idempotent local " + verb)
+            result = subprocess.run([str(CLI), "grant", "list", "alice"], capture_output=True, text=True, timeout=6)
+            check(result.returncode == 0 and "No actions on this page." in result.stdout, "revoked grant is absent")
+            result = subprocess.run([str(CLI), "grant", "alice", "missing"], capture_output=True, text=True, timeout=6)
+            check(result.returncode != 0, "unknown action cannot be granted")
             for flags in [[], ["--insecure"]]:
                 opened = subprocess.run([str(CLI), "enroll", "alice", *flags], capture_output=True, text=True, timeout=6)
                 check_cli(opened, "local enrollment open")
@@ -129,12 +150,18 @@ def isolated(original_namespace):
                     result = subprocess.run([str(CLI), "enroll", action, enrollment_id], capture_output=True, text=True, timeout=6)
                     check_cli(result, "local enrollment " + action)
             if stop_signal == signal.SIGTERM:
+                result = subprocess.run([str(CLI), "grant", "alice", "paperless.start"], capture_output=True, text=True, timeout=6)
+                check_cli(result, "create grant before installation reset")
                 result = subprocess.run([str(CLI), "init", "--reset", "--yes", "--origin", "https://wudo.example.test"], capture_output=True, text=True, timeout=6)
                 check_cli(result, "explicit isolated installation reset")
                 result = subprocess.run([str(CLI), "user", "show", "alice"], capture_output=True, text=True, timeout=6)
                 check(result.returncode != 0, "reset removed previous identity")
                 result = subprocess.run([str(CLI), "user", "create", "alice", "--label", "Alice"], capture_output=True, text=True, timeout=6)
                 check_cli(result, "fresh identity after reset")
+                result = subprocess.run([str(CLI), "grant", "list", "alice"], capture_output=True, text=True, timeout=6)
+                check(result.returncode == 0 and "No actions on this page." in result.stdout, "reset leaves no grants")
+                result = subprocess.run([str(CLI), "grant", "alice", "paperless.start"], capture_output=True, text=True, timeout=6)
+                check_cli(result, "grant from retained startup catalog after reset")
             probe("/run/wudo/admin.sock", 0, 0, True)
             probe("/run/wudo/admin.sock", 61001, 61001, False)
             probe("/run/wudo/web.sock", 61001, 61001, True)
@@ -157,7 +184,7 @@ def isolated(original_namespace):
             if process.poll() is None:
                 process.kill()
                 process.wait(timeout=3)
-    print("Deployment smoke test passed. Host /run and /var/lib were not modified.")
+    print("Deployment smoke test passed. Host /etc, /run and /var/lib were not modified.")
 
 
 if __name__ == "__main__":

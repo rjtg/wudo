@@ -2,6 +2,8 @@
 //! Not a privileged path resolver or an authentication/authorization API.
 //! The caller must keep the directory and its ancestors stable and trusted for
 //! the store lifetime. No daemon integration or network-selected paths.
+mod grants;
+pub use grants::ActionSummary;
 mod administration;
 pub use administration::{CredentialSummary, Page};
 mod credentials;
@@ -18,12 +20,13 @@ use std::{
 
 pub const MAX_USERS: usize = 64;
 const APP_ID: i64 = 0x5755444f;
-pub const SCHEMA_VERSION: usize = 3;
+pub const SCHEMA_VERSION: usize = 4;
 fn migrations() -> rusqlite_migration::Migrations<'static> {
     rusqlite_migration::Migrations::new(vec![
         rusqlite_migration::M::up(include_str!("../migrations/001_users.sql")),
         rusqlite_migration::M::up(include_str!("../migrations/002_credentials.sql")),
         rusqlite_migration::M::up(include_str!("../migrations/003_installation.sql")),
+        rusqlite_migration::M::up(include_str!("../migrations/004_grants.sql")),
     ])
 }
 const MAX_DB: u64 = 4 * 1024 * 1024;
@@ -274,7 +277,7 @@ impl Store {
             [],
             |r| r.get(0),
         )?;
-        if count != version || schema != SCHEMA {
+        if count != (if version == 4 { 5 } else { version }) || schema != SCHEMA {
             return Err(Error::InvalidStore);
         }
         let mut stmt = c.prepare("SELECT id, name, label FROM users LIMIT 65")?;
@@ -292,6 +295,9 @@ impl Store {
         }
         if version >= 3 {
             self.validate_installation()?;
+        }
+        if version >= 4 {
+            self.validate_grants()?;
         }
         Ok(())
     }

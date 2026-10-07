@@ -13,6 +13,8 @@ impl Store {
             let tx = self
                 .connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)?;
+            tx.execute("DELETE FROM grants", [])?;
+            tx.execute("DELETE FROM actions", [])?;
             tx.execute("DELETE FROM credentials", [])?;
             tx.execute("DELETE FROM users", [])?;
             tx.execute("DELETE FROM installation", [])?;
@@ -101,7 +103,18 @@ impl Store {
         if invalid {
             return Err(Error::InvalidStore);
         }
-        self.installation_origin()?;
+        let origin: Option<String> = self
+            .connection
+            .query_row("SELECT origin FROM installation WHERE id=1", [], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        if let Some(value) = origin {
+            let parsed = InstallationOrigin::parse(&value).map_err(|_| Error::InvalidStore)?;
+            if parsed.as_str() != value {
+                return Err(Error::InvalidStore);
+            }
+        }
         Ok(())
     }
 }

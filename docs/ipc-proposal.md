@@ -321,7 +321,7 @@ The script first runs `cargo build --workspace --locked` with the repository's
 `target` directory, then prompts through sudo. This keeps the CLI and daemon
 binaries in sync, including after test-only builds. It requires Cargo, Linux
 `unshare`, `mount`, Python 3, and mount-namespace privileges.
-It mounts temporary `/run` and `/var/lib` directories inside a private
+It mounts temporary `/etc`, `/run` and `/var/lib` directories inside a private
 mount namespace, runs the production binaries, and uses child processes with
 numeric UIDs/GIDs (no persistent accounts). It checks root CLI access, allowed
 web access, rejection of another UID in the web group, rejection of root on the
@@ -329,7 +329,7 @@ web endpoint, socket modes, duplicate startup, SIGTERM/SIGINT, and cleanup with
 an incomplete connection, plus initialization, user persistence, enrollment
 open/inspect/cancel, and explicit reset. The next extension also checks user
 listing, empty credential listing and missing-target inspection/revocation
-failures; the maintainer confirmed that these additional checks all pass. The host's `/run` and `/var/lib` are not
+failures; the maintainer confirmed that these additional checks all pass. The host's `/etc`, `/run` and `/var/lib` are not
 changed. Run only trusted local builds because this test executes them as root.
 The maintainer supplied a passing transcript for the expanded harness on
 2026-10-05, including both shutdown signals and persistence across restart.
@@ -344,3 +344,13 @@ v2 init/upgrade/create/show on the admin socket and requires a private root-owne
 cap is now 64 KiB with version/operation limits after strict dispatch. Malformed
 envelopes close without a response. The updated smoke test isolates `/var/lib`
 as well as `/run` and verifies persistent users across restart.
+
+
+## Action/grant administration extension
+
+The approved [action/grant contract](action-grants-proposal.md) specifies the
+implemented admin-only v2 action.list, grant.create, grant.revoke and grant.list
+schemas. Lists have 16 entries and an 8192-byte response cap; mutations retain
+4096 bytes. The deployment smoke harness now also installs isolated trusted
+configuration and checks listing, idempotent grant/revoke, unknown actions,
+reset and grant persistence. These new privileged checks need a fresh run.

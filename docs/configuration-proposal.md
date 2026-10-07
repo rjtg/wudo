@@ -1,6 +1,8 @@
 # Action configuration and offline validation proposal
 
-Status: **offline schema version 1 implemented; privileged runtime behavior remains unimplemented**.
+Status: **schema version 1 implemented; trusted startup loading and local grants
+implemented under the approved [action/grant contract](action-grants-proposal.md).
+Action execution remains unimplemented**.
 Tracks [configuration #15](https://github.com/rjtg/wudo/issues/15) and
 [action semantics #16](https://github.com/rjtg/wudo/issues/16).
 
