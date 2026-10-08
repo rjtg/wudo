@@ -171,3 +171,8 @@ and revoked callers, unknown fields/actions/states, session capacity, browser
 reload, and polling that never extends lifetime. Verify no automatic retries or
 job cancellation occur. Keep systemd integration tests isolated from host units;
 synthetic adapter tests alone do not prove a real systemd deployment works.
+
+
+Concrete viewing-session configuration, bounds and message recommendations are
+now collected in the [viewing-session proposal](viewing-session-proposal.md).
+They remain proposed until reviewed; no runtime handlers are enabled by it.
