@@ -1,9 +1,11 @@
 # Internal integrations and the first systemctl backend
 
-Status: the maintainer accepted the integration architecture and systemctl-first
-choice. Concrete subprocess, parser and budget recommendations below are a
-**reviewable proposal, not implemented or implicitly approved**. Tracks #24,
-with the [execution contract](systemd-execution-contract.md).
+Status: the maintainer approved the concrete backend policies below, including
+schema-2 configuration and a configurable acknowledgement timeout. The internal
+backend and isolated parser/process tests are implemented. Authentication,
+admission, session handlers and browser integration are still pending under #24;
+remote execution remains disabled. See the
+[execution contract](systemd-execution-contract.md).
 
 ## Accepted architecture
 
@@ -52,7 +54,7 @@ code, should cross the submission boundary. It binds the operation, action revis
 and resource guard. It is not an IPC token and must not be serializable.
 A mock backend substitutes only in tests; production configuration cannot enable it.
 
-## Proposed fixed systemctl command set
+## Fixed systemctl command set
 
 Always launch the absolute `/usr/bin/systemctl` directly, never through a shell.
 Below, UNIT is exactly one validated administrator-configured unit argument:
@@ -75,7 +77,7 @@ nonblocking invocation supports acceptance feedback, not completion feedback.
 Compatible jobs can still merge in an external race; no atomic check-and-submit
 claim is made. [systemctl manual source, v257](https://github.com/systemd/systemd/blob/v257/man/systemctl.xml).
 
-## Proposed observation parser
+## Observation parser
 
 Request just four properties and retain property names. Bound stdout to 4096
 bytes, total stdout/stderr to 16384 bytes, each line to 512 bytes and line count
@@ -121,7 +123,7 @@ not need to remain held for the lifetime of a systemd job. An external privilege
 administrator can still change aliases/state after checks; that is the already
 accepted race. Never infer a pending job disappeared merely because a client left.
 
-## Proposed process and executable trust policy
+## Process and executable trust policy
 
 Validate the fixed executable through no-follow descriptor traversal of `/usr/bin`
 and its ancestors. Require root ownership, no group/world writes, no access/default
@@ -144,11 +146,12 @@ No terminal, secret input, source error text in logs, or inherited privileged FD
 Use existing Tokio with its process support if practical; dependency/feature diff
 must be reviewed during implementation. Prefer safe Rust APIs, no pre_exec hook.
 
-## Proposed deadlines, cleanup and results
+## Deadlines, cleanup and results
 
 Observation deadline: two seconds including pipe reads and process exit, constrained
 by the page's overall budget. Submission communication deadline:
-`min(action.timeout_seconds, 3 seconds)` from spawning, not a systemd job lifetime.
+the root-configured `systemctl_ack_timeout_seconds` (default 3, range 1–30),
+not a systemd job lifetime.
 Cap global subprocess admission at four with no waiting queue. The deadline must
 not slide on partial output. Drain both streams up to the total hard cap; exceeding
 it terminates and reaps the client process. Never buffer unbounded output.
@@ -173,40 +176,29 @@ Never retry automatically or return a fake systemd job ID. A Wudo receipt, if ke
 in the wire contract, must be a local correlation ID only; receipt/message schema
 still needs separate review. Current state is not a historical execution receipt.
 
-## Existing configuration fields: proposed interpretation for review
+## Configuration and implementation status
 
-Systemd owns job timeouts. For schema-1 systemd actions, propose that
-`timeout_seconds` caps only the submission exchange, subject to the smaller fixed
-three-second ceiling. It never causes service/job cancellation. Observation has
-its own fixed budget. `output_limit_bytes` bounds service output exposed by Wudo;
-this backend exposes none (zero), satisfying all configured values. Fixed bounded
-systemctl protocol/diagnostic pipes are internal transport data and are never
-returned as service output. Document this distinction before enabling execution.
+Schema 2 removes timeout/output fields from systemd actions. LUKS-specific limits
+remain on LUKS actions. Nonempty schema-1 startup files require explicit upgrade;
+stored historical definitions remain readable so reconciliation invalidates grants
+on changed definitions. Settings are validated at startup; passing them into the
+future session/execution runtime remains part of the handler integration.
 
-This is a concrete alternative to immediately introducing a new action schema.
-It changes the earlier proposed overall-execution-budget meaning, so it requires
-explicit review. Do not silently implement it. A later schema may remove irrelevant
-systemd fields while keeping integration-specific execution limits elsewhere.
+The backend uses synchronous subprocess collection on dedicated workers, not the
+Tokio I/O thread. Collection deadlines kill and reap only the systemctl client.
+A reap that does not return retains its worker/resource slot and target guard;
+the daemon runtime must cap these workers and avoid joining them without a bound.
+That shutdown wiring is not implemented yet. Do not enable submission handlers
+until it is covered by integration tests.
 
-## Validation and next slices
+Implemented isolated tests cover the state matrix, strict property parsing,
+command/environment construction, rejected verbs/names, bounded dual pipe reads,
+output overflow, timeout cleanup, nonzero exit, and failed/expired launch.
+Tests use a Rust child fixture and do not start/stop host services.
 
-No host start/stop commands were executed for this investigation. Evidence is the
-upstream manual/source, not a real-systemd E2E result. No production Rust/dependency
-changes in this document-only slice.
-
-1. Review subprocess trust/deadlines, config-field interpretation and output/result
-   policy together. Architecture and systemctl-first choice are already accepted.
-2. Add isolated parser/process runner tests: missing/duplicate/unknown fields,
-   empty versus missing Job, oversized output, concurrent stdout/stderr, timeout,
-   nonzero/signal, hostile inherited environment, executable symlink/ACL/mode checks,
-   alias convergence, identity changes and caller disconnect without releasing guard.
-3. Implement typed facade and systemctl backend without enabling remote execution.
-   Apply identical contract tests to future implementations.
-4. Connect admission only after grant/revision/credential serialization and wire
-   acceptance/uncertainty semantics are reviewed. Validate against a disposable
-   real systemd manager, including external pending jobs and dependency conflicts.
-   Browser and Pi validation remain distinct follow-ups.
-
+Still required: executable ownership/ACL/symlink fixture tests, real systemd alias
+and pending-job tests, bounded runtime shutdown, serialized final authorization,
+and browser/Pi validation. A compiled backend is not end-to-end execution support.
 
 ## Follow-up review decisions (supersede earlier alternatives)
 
