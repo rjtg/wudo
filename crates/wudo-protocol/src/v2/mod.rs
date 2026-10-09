@@ -162,6 +162,9 @@ fn checked(bytes: &[u8]) -> Result<Fields<'_>> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Operation {
+    ViewBegin,
+    ViewFinish,
+    ViewActions,
     GrantRevoke,
     GrantCreate,
     GrantList,
@@ -215,12 +218,14 @@ impl Operation {
     pub fn request_limit(self) -> usize {
         match self {
             Self::RegistrationFinish => 40960,
-            Self::ActionFinish => 12288,
+            Self::ActionFinish | Self::ViewFinish => 12288,
             _ => 4096,
         }
     }
     pub fn response_limit(self) -> usize {
         match self {
+            Self::ViewActions => 16384,
+            Self::ViewBegin => 24576,
             Self::UserList | Self::ActionList | Self::GrantList => 8192,
             Self::CredentialList => 32768,
             Self::RegistrationBegin | Self::RegistrationBeginInsecure | Self::ActionBegin => {
@@ -231,6 +236,9 @@ impl Operation {
     }
     fn name(self) -> &'static str {
         match self {
+            Self::ViewBegin => "view.begin",
+            Self::ViewFinish => "view.finish",
+            Self::ViewActions => "view.actions",
             Self::ActionList => "action.list",
             Self::GrantList => "grant.list",
             Self::GrantCreate => "grant.create",
@@ -259,6 +267,9 @@ impl Operation {
     }
     fn parse(s: &str) -> Result<Self> {
         [
+            Self::ViewBegin,
+            Self::ViewFinish,
+            Self::ViewActions,
             Self::ActionList,
             Self::GrantList,
             Self::GrantCreate,
@@ -294,6 +305,9 @@ impl Operation {
 // must not become diagnostics through a derived formatter.
 #[derive(Clone, PartialEq, Eq)]
 pub enum Request<'a> {
+    ViewBegin(ViewBegin<'a>),
+    ViewFinish(ActionFinish<'a>),
+    ViewActions(ViewActions<'a>),
     GrantRevoke(GrantRef<'a>),
     GrantCreate(GrantRef<'a>),
     GrantList(GrantQuery<'a>),
@@ -322,6 +336,9 @@ pub enum Request<'a> {
 impl Request<'_> {
     pub fn operation(&self) -> Operation {
         match self {
+            Self::ViewBegin(_) => Operation::ViewBegin,
+            Self::ViewFinish(_) => Operation::ViewFinish,
+            Self::ViewActions(_) => Operation::ViewActions,
             Self::ActionList(_) => Operation::ActionList,
             Self::GrantList(_) => Operation::GrantList,
             Self::GrantCreate(_) => Operation::GrantCreate,
@@ -388,6 +405,9 @@ pub fn decode_request(bytes: &[u8], endpoint: Endpoint) -> Result<Request<'_>> {
         Operation::InstallationInitialize => {
             Request::InstallationInitialize(InstallationInitialize::read(body)?)
         }
+        Operation::ViewBegin => Request::ViewBegin(ViewBegin::read(body)?),
+        Operation::ViewFinish => Request::ViewFinish(ActionFinish::read(body)?),
+        Operation::ViewActions => Request::ViewActions(ViewActions::read(body)?),
         Operation::ActionList => Request::ActionList(ActionList::read(body)?),
         Operation::GrantList => Request::GrantList(GrantQuery::read(body)?),
         Operation::GrantCreate => Request::GrantCreate(GrantRef::read(body)?),
@@ -421,7 +441,9 @@ pub fn decode_request(bytes: &[u8], endpoint: Endpoint) -> Result<Request<'_>> {
             bounded::client_data(v.client_data.0, true)?;
             bounded::attestation(v.attestation_object.0)?;
         }
-        Request::ActionFinish(v) => bounded::client_data(v.client_data.0, false)?,
+        Request::ActionFinish(v) | Request::ViewFinish(v) => {
+            bounded::client_data(v.client_data.0, false)?
+        }
         _ => {}
     }
     Ok(request)
@@ -445,6 +467,9 @@ pub fn encode_request(out: &mut [u8], request: &Request<'_>, endpoint: Endpoint)
             e.map(0)?;
         }
         Request::InstallationInitialize(v) | Request::InstallationReset(v) => v.write(&mut e)?,
+        Request::ViewBegin(v) => v.write(&mut e)?,
+        Request::ViewFinish(v) => v.write(&mut e)?,
+        Request::ViewActions(v) => v.write(&mut e)?,
         Request::ActionList(v) => v.write(&mut e)?,
         Request::GrantList(v) => v.write(&mut e)?,
         Request::GrantCreate(v) => v.write(&mut e)?,
@@ -470,6 +495,8 @@ pub fn encode_request(out: &mut [u8], request: &Request<'_>, endpoint: Endpoint)
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum Response<'a> {
+    ViewSession(ViewSession),
+    ViewPage(ViewPage<'a>),
     GrantChanged(GrantChanged<'a>),
     GrantPage(GrantPage<'a>),
     ActionPage(ActionPage<'a>),
@@ -605,12 +632,40 @@ pub fn decode_response<'a>(
             Response::RegistrationChallenge(value)
         }
         Request::RegistrationFinish(_) => Response::Registered(Registered::read(body)?),
-        Request::ActionBegin(_) => {
+        Request::ActionBegin(_) | Request::ViewBegin(_) => {
             let value = ActionChallenge::read(body)?;
             if value.options.timeout_ms.0 > value.remaining_ms.0 {
                 return Err(Error::InvalidRequest);
             }
             Response::ActionChallenge(value)
+        }
+        Request::ViewFinish(_) => Response::ViewSession(ViewSession::read(body)?),
+        Request::ViewActions(q) => {
+            let p = ViewPage::read(body)?;
+            let mut previous = q.after.map(|v| v.0).unwrap_or("");
+            for a in &p.actions.0 {
+                if a.action_id.0 <= previous
+                    || a.description.0.trim().is_empty()
+                    || a.description.0.chars().any(char::is_control)
+                {
+                    return Err(Error::InvalidRequest);
+                }
+                if a.availability == Availability::Available
+                    && !matches!(
+                        a.state,
+                        UnitState::Active | UnitState::Inactive | UnitState::Failed
+                    )
+                {
+                    return Err(Error::InvalidRequest);
+                }
+                previous = a.action_id.0;
+            }
+            if p.next_after
+                .is_some_and(|n| p.actions.0.len() != 16 || n.0 != previous)
+            {
+                return Err(Error::InvalidRequest);
+            }
+            Response::ViewPage(p)
         }
         Request::ActionFinish(_) => Response::Admitted(Admitted::read(body)?),
     };
@@ -631,6 +686,8 @@ pub fn encode_response(
     } else {
         e.str("ok")?.str("body")?;
         match response {
+            Response::ViewSession(v) => v.write(&mut e)?,
+            Response::ViewPage(v) => v.write(&mut e)?,
             Response::Status(v) => v.write(&mut e)?,
             Response::StoreReady(v) => v.write(&mut e)?,
             Response::ActionPage(v) => v.write(&mut e)?,

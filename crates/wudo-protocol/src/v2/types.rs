@@ -113,6 +113,7 @@ id!(CandidateId, 32);
 id!(CeremonyId, 32);
 id!(OperationId, 32);
 id!(Ticket, 32);
+id!(ViewToken, 32);
 id!(Fingerprint, 32);
 id!(Challenge, 32);
 
@@ -153,7 +154,7 @@ text_enum!(NoAttestation { None => "none" });
 text_enum!(Ready { Ready => "ready" });
 text_enum!(Cancelled { Cancelled => "cancelled" });
 text_enum!(Active { Active => "active" });
-text_enum!(Accepted { Accepted => "accepted" });
+text_enum!(Accepted { Accepted => "accepted", Unknown => "outcome-unknown" });
 text_enum!(RegistrationState { PendingApproval => "pending-approval", Active => "active" });
 text_enum!(OpenState { Open => "open", Registering => "registering" });
 text_enum!(PendingApproval { PendingApproval => "pending-approval" });
@@ -356,3 +357,11 @@ map_struct!(ActionEntry<'a> { action_id: Name<'a>, description: Text<'a, 256>, r
 map_struct!(ActionPage<'a> { actions: Items<ActionEntry<'a>> } optional { next_after: Name<'a> });
 map_struct!(GrantPage<'a> { user_id: UserId, actions: Items<ActionEntry<'a>> } optional { next_after: Name<'a> });
 map_struct!(GrantChanged<'a> { user_id: UserId, action_id: Name<'a>, revision: Blob<'a, 32, 32>, granted: bool } optional {});
+
+text_enum!(UnitState { Active => "active", Inactive => "inactive", Failed => "failed", Transitioning => "transitioning", Unknown => "unknown" });
+text_enum!(Availability { Available => "available", AlreadyRunning => "already-running", AlreadyStopped => "already-stopped", Busy => "busy", StateUnavailable => "state-unavailable", Unsupported => "unsupported" });
+map_struct!(ViewBegin<'a> { user_name: Name<'a> } optional {});
+map_struct!(ViewActions<'a> { token: ViewToken } optional { after: Name<'a> });
+map_struct!(ViewSession { token: ViewToken, remaining_ms: Number<600000> } optional {});
+map_struct!(ViewAction<'a> { action_id: Name<'a>, description: Text<'a, 256>, revision: Blob<'a, 32, 32>, confirmation: bool, state: UnitState, availability: Availability } optional {});
+map_struct!(ViewPage<'a> { remaining_ms: Number<600000>, actions: Items<ViewAction<'a>> } optional { next_after: Name<'a> });

@@ -188,3 +188,20 @@ Implementation sequence within #24:
 4. Connect filtered pages/status projection and Rust/WASM sign-in/polling, then
    add isolated browser tests. Real systemd observations depend on the adapter;
    action admission and execution remain separately gated.
+
+
+## Codec implementation progress
+
+The v2 codec now defines `view.begin`, `view.finish`, and `view.actions`, restricted
+to the web endpoint. Begin uses the existing bounded authentication challenge
+shape; finish returns a 32-byte token and absolute remaining lifetime (at most
+600000 ms). Actions returns at most 16 sorted entries with ID, description,
+32-byte revision, confirmation flag, unit state and availability. Pagination
+cursors must match the last entry of a full page. Unknown states/fields, invalid
+token lengths and inconsistent availability fail validation.
+
+Action submission responses retain the existing opaque local `operation_id` and
+add `outcome-unknown` alongside `accepted`. The ID is correlation only, not a
+systemd job ID or a promise of execution-history lookup. Neither outcome is
+service completion or health. This codec support does not enable daemon handlers,
+authentication, sessions, HTTP routes or UI controls; those remain pending.
