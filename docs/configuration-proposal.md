@@ -260,3 +260,24 @@ short-lived **read-only viewing sessions**, never session-authorized execution.
 Earlier no-session wording applies to execution authorization. The existing
 runtime/codec is unchanged; exact new wire schemas and the meaning of existing
 execution-timeout fields still require reconciliation before implementation.
+
+
+## Action schema 2 and daemon settings
+
+Schema 2 removes `timeout_seconds` and `output_limit_bytes` from systemd-start
+and systemd-stop actions (including those with a prerequisite). Supplying them
+is an error. LUKS-unlock definitions retain their existing limits, though LUKS
+execution is not enabled. See examples/paperless.v2.actions.toml.
+
+The offline parser still reads schema 1 for existing canonical database records
+and migration inspection. Production startup refuses a nonempty schema-1 catalog
+with an explicit upgrade diagnostic. Edit schema_version to 2 and remove the two
+fields from systemd actions, validate, restart, inspect and regrant changed actions.
+There is no implicit conversion or database schema change. The original example
+remains a historical schema-1 fixture.
+
+Root-owned /etc/wudo/wudod.toml has optional integer settings
+systemctl_ack_timeout_seconds (default 3, range 1–30) and view_session_seconds
+(default 300, range 60–600). It uses the same file trust policy as actions.toml,
+a 4096-byte ceiling, and strict field/type/range checks. Absence uses defaults;
+malformed/untrusted settings fail startup. Restart applies changes.

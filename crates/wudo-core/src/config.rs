@@ -108,8 +108,8 @@ pub enum Resource {
 pub struct Action {
     pub description: String,
     pub confirmation: bool,
-    pub timeout_seconds: u16,
-    pub output_limit_bytes: u32,
+    pub timeout_seconds: Option<u16>,
+    pub output_limit_bytes: Option<u32>,
     pub operation: Operation,
     pub prerequisite: Option<Prerequisite>,
 }
@@ -125,6 +125,11 @@ pub enum Prerequisite {
 }
 
 impl Config {
+    pub fn schema_version(&self) -> i64 {
+        self.source["schema_version"]
+            .as_integer()
+            .expect("validated schema")
+    }
     pub fn resources(&self) -> &BTreeMap<ResourceId, Resource> {
         &self.resources
     }
@@ -148,7 +153,8 @@ impl Config {
     fn from_table(mut root: Table) -> Result<Self> {
         let source = root.clone();
         fields(&root, &["schema_version", "resources", "actions"])?;
-        if integer(&mut root, "schema_version")? != 1 {
+        let schema = integer(&mut root, "schema_version")?;
+        if ![1, 2].contains(&schema) {
             return Err(error(ErrorKind::UnsupportedSchema));
         }
         let resource_tables = table(&mut root, "resources")?;
@@ -219,11 +225,6 @@ impl Config {
                 Value::Boolean(v) => v,
                 _ => return Err(error(ErrorKind::InvalidSchema)),
             };
-            let timeout = integer(&mut t, "timeout_seconds")?;
-            let output = integer(&mut t, "output_limit_bytes")?;
-            if !(1..=600).contains(&timeout) || !(0..=65_536).contains(&output) {
-                return Err(error(ErrorKind::InvalidValue));
-            }
             let mut op = table(&mut t, "operation")?;
             let operation = match string(&mut op, "kind")?.as_str() {
                 "luks-unlock" => {
@@ -246,6 +247,20 @@ impl Config {
                 }
                 _ => return Err(error(ErrorKind::InvalidValue)),
             };
+            let (timeout, output) =
+                if schema == 1 || matches!(operation, Operation::LuksUnlock { .. }) {
+                    let timeout = integer(&mut t, "timeout_seconds")?;
+                    let output = integer(&mut t, "output_limit_bytes")?;
+                    if !(1..=600).contains(&timeout) || !(0..=65_536).contains(&output) {
+                        return Err(error(ErrorKind::InvalidValue));
+                    }
+                    (Some(timeout as u16), Some(output as u32))
+                } else {
+                    if t.contains_key("timeout_seconds") || t.contains_key("output_limit_bytes") {
+                        return Err(error(ErrorKind::UnknownField));
+                    }
+                    (None, None)
+                };
             let prerequisite = if let Some(value) = t.remove("prerequisite") {
                 if !matches!(operation, Operation::SystemdStart { .. }) {
                     return Err(error(ErrorKind::InvalidValue));
@@ -266,8 +281,8 @@ impl Config {
                 Action {
                     description,
                     confirmation,
-                    timeout_seconds: timeout as u16,
-                    output_limit_bytes: output as u32,
+                    timeout_seconds: timeout,
+                    output_limit_bytes: output,
                     operation,
                     prerequisite,
                 },
@@ -369,7 +384,7 @@ impl Config {
             let value = serde_json::to_value(&self.source["actions"][id.as_str()])
                 .map_err(|_| error(ErrorKind::InvalidSchema))?;
             actions.insert(id.as_str().into(), value);
-            let value = serde_json::json!({"format":1,"config":{"schema_version":1,"resources":resources,"actions":actions}});
+            let value = serde_json::json!({"format":1,"config":{"schema_version":self.schema_version(),"resources":resources,"actions":actions}});
             let bytes = serde_json::to_vec(&value).map_err(|_| error(ErrorKind::InvalidSchema))?;
             if bytes.len() > 4096 {
                 return Err(error(ErrorKind::InputTooLarge));

@@ -86,7 +86,7 @@ def isolated(original_namespace):
     config_directory.mkdir(mode=0o755)
     config_directory.chmod(0o755)
     config_file = config_directory / "actions.toml"
-    config_file.write_text((ROOT / "examples/paperless.actions.toml").read_text())
+    config_file.write_text((ROOT / "examples/paperless.v2.actions.toml").read_text())
     config_file.chmod(0o644)
     state_directory = Path("/var/lib/wudo")
     state_directory.mkdir(mode=0o700)

@@ -1,0 +1,42 @@
+# Schema v2 example; runtime operations are not yet implemented.
+# This is the action/resource document, not a complete daemon configuration.
+# Replace the illustrative LUKS UUID and unit name before deployment.
+schema_version = 2
+
+[resources."paperless-storage"]
+kind = "luks2"
+luks_uuid = "11111111-2222-4333-8444-555555555555"
+mapping_name = "paperless_crypt"
+# Definition only: key material, wrappers and keyslot metadata live in daemon state.
+[resources."paperless-storage".managed_secret]
+id = "paperless-key"
+
+[actions."storage.unlock"]
+description = "Unlock Paperless storage"
+confirmation = true
+timeout_seconds = 60
+output_limit_bytes = 16384
+[actions."storage.unlock".operation]
+kind = "luks-unlock"
+resource = "paperless-storage"
+
+[actions."paperless.start"]
+description = "Unlock storage if needed and start Paperless"
+confirmation = true
+timeout_seconds = 180
+output_limit_bytes = 16384
+[actions."paperless.start".prerequisite]
+kind = "luks-unlocked"
+resource = "paperless-storage"
+[actions."paperless.start".operation]
+kind = "systemd-start"
+unit = "paperless.service"
+
+[actions."paperless.stop"]
+description = "Stop Paperless without locking storage"
+confirmation = true
+timeout_seconds = 120
+output_limit_bytes = 16384
+[actions."paperless.stop".operation]
+kind = "systemd-stop"
+unit = "paperless.service"

@@ -206,3 +206,16 @@ changes in this document-only slice.
    acceptance/uncertainty semantics are reviewed. Validate against a disposable
    real systemd manager, including external pending jobs and dependency conflicts.
    Browser and Pi validation remain distinct follow-ups.
+
+
+## Follow-up review decisions (supersede earlier alternatives)
+
+The maintainer approved fixed nonblocking start/stop with job-mode=fail, unknown
+outcomes for unsuccessful post-spawn calls, fixed validated /usr/bin/systemctl,
+canonical unit guards and a root-configurable acknowledgement timeout (3 seconds,
+range 1–30). Settings live in /etc/wudo/wudod.toml, not CLI flags. Remove timeout
+and output fields from systemd actions in schema 2 instead of reinterpreting
+schema 1. Existing stored v1 records remain readable for reconciliation; nonempty
+legacy startup files require explicit upgrade. Root must regrant changed actions.
+Action submissions get a separate transport budget accommodating the configured
+acknowledgement timeout; ordinary sign-in/status exchanges remain short.

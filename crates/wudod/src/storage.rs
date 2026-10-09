@@ -449,7 +449,8 @@ pub(crate) fn production() -> Result<Worker, ()> {
     // SQLite NOFOLLOW rejects procfs descriptor aliases. All ancestors of this
     // fixed path were validated; root is trusted not to replace them.
     let path = PathBuf::from("/var/lib/wudo");
-    Worker::start_configured(path, Some(fd), actions::production()?)
+    let (catalog, _settings) = actions::production()?;
+    Worker::start_configured(path, Some(fd), catalog)
 }
 fn check_directory(fd: &std::os::fd::OwnedFd, leaf: bool) -> Result<(), ()> {
     use rustix::{fs, io::Errno};

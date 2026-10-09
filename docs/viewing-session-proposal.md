@@ -1,9 +1,9 @@
 # Read-only viewing sessions: configuration and wire proposal
 
-Status: **proposal for consolidated review, not implemented**. The product
+Status: **maintainer review completed; implementation in progress**. The product
 behavior is already agreed in the [execution contract](systemd-execution-contract.md).
-The concrete bounds, operations and configuration below are recommendations,
-not additional approved security decisions. Tracking: #24; roadmap #20.
+The maintainer approved the operations, lifetime/capacity/polling bounds and
+read-only bearer-token exposure in the follow-up walkthrough. Tracking: #24; roadmap #20.
 
 ## Authority and scope
 
@@ -21,17 +21,21 @@ on the daemon state owner after verification. A stale snapshot requires fresh
 sign-in. Sign-in and action ceremony state use distinct typed purposes: even a
 cryptographically valid assertion cannot finish a ceremony under another purpose.
 
-## Configuration recommendation
+## Accepted daemon configuration
 
-Add root-managed startup argument `wudod --view-session-seconds N`:
+Root-owned `/etc/wudo/wudod.toml`, read only at startup, holds:
 
-- Default 300 seconds (five minutes).
-- Decimal integer from 60 through 600 inclusive; reject duplicate flags, invalid
-  values, overflow and unknown arguments before startup.
-- The administrator places this in the daemon's trusted service configuration.
-  Neither CLI users over the web socket nor browser requests can choose lifetime.
-- Startup-only; restart invalidates sessions. No live setting change, new config
-  file or database migration. Installation origin remains managed by `wudo init`.
+```toml
+systemctl_ack_timeout_seconds = 3
+view_session_seconds = 300
+```
+
+Acknowledgement timeout accepts 1–30 seconds; viewing lifetime accepts 60–600
+seconds. Missing file/fields use defaults. Reject unknown/duplicate fields,
+wrong types and out-of-range values. Maximum file size is 4096 bytes. Apply the
+same root-owned directory/file, no-follow, mode and ACL checks as actions.toml.
+Restart is required for changes; restart invalidates sessions. No browser/client
+can set these values. This replaces the earlier proposed command-line flag.
 
 Expiry is an absolute monotonic deadline starting when a session is issued after
 successful verification and persistence. Polls never renew it. Return remaining

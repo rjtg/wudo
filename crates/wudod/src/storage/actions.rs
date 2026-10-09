@@ -31,28 +31,45 @@ fn directory(fd: &OwnedFd, leaf: bool, uid: u32) -> Result<(), ()> {
     }
     no_acl(fd)
 }
-pub(super) fn production() -> Result<Config, ()> {
+pub(super) fn production() -> Result<(Config, wudo_core::settings::Settings), ()> {
     let root = fs::open("/", DIR, Mode::empty()).map_err(|_| ())?;
     directory(&root, false, 0)?;
     let etc = fs::openat(&root, "etc", DIR, Mode::empty()).map_err(|_| ())?;
     directory(&etc, false, 0)?;
-    load(&etc, 0)
+    let config = load(&etc, 0)?;
+    if !config.actions().is_empty() && config.schema_version() != 2 {
+        eprintln!(
+            "wudod: actions-schema-upgrade-required (use schema_version=2; remove timeout_seconds/output_limit_bytes from systemd actions)"
+        );
+        return Err(());
+    }
+    let settings = match read(&etc, 0, "wudod.toml", 4096)? {
+        Some(bytes) => wudo_core::settings::Settings::parse(&bytes).map_err(|_| ())?,
+        None => wudo_core::settings::Settings::default(),
+    };
+    Ok((config, settings))
 }
 fn load(etc: &OwnedFd, uid: u32) -> Result<Config, ()> {
+    match read(etc, uid, "actions.toml", MAX_INPUT_BYTES)? {
+        Some(bytes) => Config::parse(&bytes).map_err(|_| ()),
+        None => Ok(Config::empty()),
+    }
+}
+fn read(etc: &OwnedFd, uid: u32, filename: &str, limit: usize) -> Result<Option<Vec<u8>>, ()> {
     let dir = match fs::openat(etc, "wudo", DIR, Mode::empty()) {
         Ok(v) => v,
-        Err(Errno::NOENT) => return Ok(Config::empty()),
+        Err(Errno::NOENT) => return Ok(None),
         Err(_) => return Err(()),
     };
     directory(&dir, true, uid)?;
     let fd = match fs::openat(
         &dir,
-        "actions.toml",
+        filename,
         OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::NOCTTY | OFlags::CLOEXEC,
         Mode::empty(),
     ) {
         Ok(v) => v,
-        Err(Errno::NOENT) => return Ok(Config::empty()),
+        Err(Errno::NOENT) => return Ok(None),
         Err(_) => return Err(()),
     };
     let before = fs::fstat(&fd).map_err(|_| ())?;
@@ -62,7 +79,7 @@ fn load(etc: &OwnedFd, uid: u32) -> Result<Config, ()> {
         || before.st_nlink != 1
         || fs::FileType::from_raw_mode(before.st_mode) != fs::FileType::RegularFile
         || before.st_size < 0
-        || before.st_size as u64 > MAX_INPUT_BYTES as u64
+        || before.st_size as u64 > limit as u64
     {
         return Err(());
     }
@@ -70,11 +87,11 @@ fn load(etc: &OwnedFd, uid: u32) -> Result<Config, ()> {
     let mut file = File::from(fd);
     let mut bytes = Vec::new();
     (&mut file)
-        .take(MAX_INPUT_BYTES as u64 + 1)
+        .take(limit as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| ())?;
     let after = fs::fstat(&file).map_err(|_| ())?;
-    let path = fs::statat(&dir, "actions.toml", fs::AtFlags::SYMLINK_NOFOLLOW).map_err(|_| ())?;
+    let path = fs::statat(&dir, filename, fs::AtFlags::SYMLINK_NOFOLLOW).map_err(|_| ())?;
     if before.st_dev != after.st_dev
         || before.st_ino != after.st_ino
         || before.st_size != after.st_size
@@ -91,7 +108,10 @@ fn load(etc: &OwnedFd, uid: u32) -> Result<Config, ()> {
     {
         return Err(());
     }
-    Config::parse(&bytes).map_err(|_| ())
+    if bytes.len() > limit {
+        return Err(());
+    }
+    Ok(Some(bytes))
 }
 
 #[cfg(test)]
