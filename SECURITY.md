@@ -297,3 +297,14 @@ cancel/undo them on browser disconnect or observation timeout. State checks gate
 start/stop and conflicts are rejected without queuing. Accepted submission is
 not successful completion or application health. Exact session protocol,
 systemd interface and timeout-field changes remain explicit implementation gates.
+
+
+## Internal integration boundary
+
+Accepted architecture: compile-time typed integrations behind a small internal
+availability/submission facade. Start with systemd through fixed systemctl calls.
+Authentication, authorization, action revisions and admission remain daemon-owned.
+No dynamic plugin loading, arbitrary operation maps, command templates or remote
+backend selection. LUKS and future integrations require explicit typed semantics
+and security review; the facade does not authorize generic privileged execution.
+Concrete backend policies remain proposed in [the backend design](docs/integration-backends.md).

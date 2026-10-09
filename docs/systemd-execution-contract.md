@@ -125,9 +125,10 @@ assumption that the unit stopped.
 
 These are engineering follow-ups, not unresolved user-facing behavior:
 
-- Select and review the systemd interface/dependency, bounded calls, non-replacing
-  job submission, canonical unit identity/aliases, and authoritative pending-job
-  checks. Locks must not be bypassable through two names for the same unit.
+- Accepted: use a general compile-time integration facade, with systemctl as the
+  first systemd backend. Review concrete subprocess/deadline/parser recommendations
+  in [integration backends](integration-backends.md), including alias-safe identity
+  and pending-job checks. A future D-Bus backend must preserve the same contract.
 - Define exact daemon-owned session configuration location, accepted lifetime
   range, token construction, session/ceremony caps, eviction and response sizes.
   Do not introduce an unbounded session table or unauthenticated status oracle.
@@ -176,3 +177,10 @@ synthetic adapter tests alone do not prove a real systemd deployment works.
 Concrete viewing-session configuration, bounds and message recommendations are
 now collected in the [viewing-session proposal](viewing-session-proposal.md).
 They remain proposed until reviewed; no runtime handlers are enabled by it.
+
+
+The maintainer approved typed integration-specific operations behind a shared
+internal availability/submission facade, with daemon-owned security checks.
+See [integration backends](integration-backends.md). No dynamic plugins, command
+templates or user-selected backend are permitted. Root selection can be introduced
+when a second reviewed implementation actually exists.
