@@ -98,3 +98,28 @@ fn all_capability_fields_and_stored_record_shape_are_binding() {
         .replace("\"format\":1", "\"format\":1,\"format\":1");
     assert!(ActionDefinition::decode(duplicate.as_bytes()).is_err());
 }
+
+#[test]
+fn deployed_schema_two_example_has_integration_specific_limits() {
+    let config = Config::parse(include_bytes!(
+        "../../../examples/paperless.v2.actions.toml"
+    ))
+    .unwrap();
+    assert_eq!(config.schema_version(), 2);
+    for (id, action) in config.actions() {
+        assert_eq!(
+            action.timeout_seconds.is_some(),
+            id.as_str() == "storage.unlock"
+        );
+        assert_eq!(
+            action.output_limit_bytes.is_some(),
+            id.as_str() == "storage.unlock"
+        );
+    }
+    for definition in config.definitions().unwrap() {
+        assert_eq!(
+            ActionDefinition::decode(&definition.bytes).unwrap().bytes,
+            definition.bytes
+        );
+    }
+}

@@ -23,8 +23,6 @@ resource = "paperless-storage"
 [actions."paperless.start"]
 description = "Unlock storage if needed and start Paperless"
 confirmation = true
-timeout_seconds = 180
-output_limit_bytes = 16384
 [actions."paperless.start".prerequisite]
 kind = "luks-unlocked"
 resource = "paperless-storage"
@@ -35,8 +33,6 @@ unit = "paperless.service"
 [actions."paperless.stop"]
 description = "Stop Paperless without locking storage"
 confirmation = true
-timeout_seconds = 120
-output_limit_bytes = 16384
 [actions."paperless.stop".operation]
 kind = "systemd-stop"
 unit = "paperless.service"
