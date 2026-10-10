@@ -233,3 +233,33 @@ wrong origin/signature, expiry, stale snapshots, revocation before commit, grant
 removal, throttling, reservations and orphan-session capacity; daemon IPC tests
 exercise sign-in, revocation, reset and restart-scoped tokens. This is synthetic
 verification and IPC evidence, not browser or real-authenticator validation.
+
+
+## Browser and asynchronous observation integration
+
+The Rust/WASM UI now supports username/passkey sign-in, memory-only viewing
+sessions, sign-out, 16-row pagination, five-second visible-page polling and refresh
+on visibility restoration. Navigation/reload discards the token; expiry and
+errors clear it and the displayed page. No token enters a URL, DOM text, cookie
+or browser storage. Action descriptions/status use text nodes, not HTML parsing.
+The current UI displays availability; action invocation controls remain pending.
+
+POST /api/view has its own allowlist (the three viewing operations) and 12288-byte
+body cap. It retains same-origin headers, no-store, CSP, bounded replies, root
+socket-peer verification and a five-second relay deadline. Enrollment stays on
+its separate allowlist; action/admin requests are rejected by both routes.
+
+The daemon admits at most four observation workers without queuing. Each page
+gets a single two-second budget shared across its configured systemd queries.
+Queries never run on the serialized state owner. A session allows only one
+outstanding page query. Before returning a page, the state owner rechecks expiry,
+credential status, grants and revisions. Removed grants are omitted; newly
+added/changed rows have unknown status rather than inheriting stale observations.
+Reset/restart invalidates outstanding work. Backend shutdown signals child cleanup
+and waits at most two seconds for observer workers; a stuck reap retains its
+resource slot in the bounded detached worker. No systemd job is cancelled.
+
+The container browser harness now exercises sign-in, current grant filtering,
+grant removal, reload and credential revocation. Its updated run still needs
+maintainer validation: Docker socket access was denied in the agent environment.
+Native/IPC and WASM tests are separate evidence from real browser/systemd tests.

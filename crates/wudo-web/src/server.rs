@@ -81,7 +81,7 @@ fn error(status: StatusCode) -> Response {
     response(
         status,
         "text/plain; charset=utf-8",
-        "Enrollment request unavailable.\n",
+        "Request unavailable.\n",
     )
 }
 async fn handle(State(app): State<Arc<App>>, req: Request) -> Response {
@@ -114,7 +114,12 @@ async fn handle(State(app): State<Arc<App>>, req: Request) -> Response {
             _ => error(StatusCode::NOT_FOUND),
         };
     }
-    if req.method() != "POST" || req.uri().path() != "/api/enroll" {
+    let route = match req.uri().path() {
+        "/api/enroll" => relay::Route::Enrollment,
+        "/api/view" => relay::Route::Viewing,
+        _ => return error(StatusCode::NOT_FOUND),
+    };
+    if req.method() != "POST" {
         return error(StatusCode::NOT_FOUND);
     }
     if single(req.headers(), "origin") != Some(app.origin.as_str())
@@ -128,10 +133,10 @@ async fn handle(State(app): State<Arc<App>>, req: Request) -> Response {
     {
         return error(StatusCode::UNSUPPORTED_MEDIA_TYPE);
     }
-    let Ok(bytes) = to_bytes(req.into_body(), relay::MAX_REQUEST).await else {
+    let Ok(bytes) = to_bytes(req.into_body(), route.limit()).await else {
         return error(StatusCode::PAYLOAD_TOO_LARGE);
     };
-    if relay::registration(&bytes).is_err() {
+    if route.decode(&bytes).is_err() {
         return error(StatusCode::BAD_REQUEST);
     }
     let target = (Path::new(wudo_protocol::WEB_SOCKET), 0);
@@ -141,7 +146,7 @@ async fn handle(State(app): State<Arc<App>>, req: Request) -> Response {
         .as_ref()
         .map(|(p, u)| (p.as_path(), *u))
         .unwrap_or(target);
-    match relay::exchange(target.0, target.1, &bytes).await {
+    match relay::exchange(target.0, target.1, &bytes, route).await {
         Ok(reply) => response(StatusCode::OK, "application/cbor", reply),
         Err(()) => error(StatusCode::BAD_GATEWAY),
     }
@@ -221,58 +226,131 @@ mod tests {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use wudo_protocol::v2 as v;
         runtime().block_on(async {
-            let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().join("web.sock");
-            let listener = tokio::net::UnixListener::bind(&path).unwrap();
-            let mut app = app();
-            Arc::get_mut(&mut app).unwrap().daemon =
-                Some((path, rustix::process::geteuid().as_raw()));
-            let q = v::Request::RegistrationBegin(v::RegistrationBegin {
-                ticket: v::Ticket([7; 32]),
-            });
-            let mut payload = vec![0; 4096];
-            let n = v::encode_request(&mut payload, &q, v::Endpoint::Web).unwrap();
-            payload.truncate(n);
-            let sent = payload.clone();
-            let daemon = tokio::spawn(async move {
-                let (mut socket, _) = listener.accept().await.unwrap();
-                let mut bytes = Vec::new();
-                socket.read_to_end(&mut bytes).await.unwrap();
-                assert_eq!(&bytes[4..], sent);
-                assert_eq!(
-                    u32::from_be_bytes(bytes[..4].try_into().unwrap()) as usize,
-                    sent.len()
-                );
-                let q = v::decode_request(&sent, v::Endpoint::Web).unwrap();
-                let mut out = [0; 4096];
-                let n = v::encode_response(
-                    &mut out,
-                    &v::Response::Error(v::Error::Unavailable),
-                    &q,
+            for viewing in [false, true] {
+                let dir = tempfile::tempdir().unwrap();
+                let path = dir.path().join("web.sock");
+                let listener = tokio::net::UnixListener::bind(&path).unwrap();
+                let mut app = app();
+                Arc::get_mut(&mut app).unwrap().daemon =
+                    Some((path, rustix::process::geteuid().as_raw()));
+                let q = if viewing {
+                    v::Request::ViewBegin(v::ViewBegin {
+                        user_name: v::Name("alice"),
+                    })
+                } else {
+                    v::Request::RegistrationBegin(v::RegistrationBegin {
+                        ticket: v::Ticket([7; 32]),
+                    })
+                };
+                let mut payload = vec![0; 4096];
+                let n = v::encode_request(&mut payload, &q, v::Endpoint::Web).unwrap();
+                payload.truncate(n);
+                let sent = payload.clone();
+                let daemon = tokio::spawn(async move {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let mut bytes = Vec::new();
+                    socket.read_to_end(&mut bytes).await.unwrap();
+                    assert_eq!(&bytes[4..], sent);
+                    assert_eq!(
+                        u32::from_be_bytes(bytes[..4].try_into().unwrap()) as usize,
+                        sent.len()
+                    );
+                    let q = v::decode_request(&sent, v::Endpoint::Web).unwrap();
+                    let mut out = [0; 4096];
+                    let n = v::encode_response(
+                        &mut out,
+                        &v::Response::Error(v::Error::Unavailable),
+                        &q,
+                        v::Endpoint::Web,
+                    )
+                    .unwrap();
+                    socket.write_all(&(n as u32).to_be_bytes()).await.unwrap();
+                    socket.write_all(&out[..n]).await.unwrap();
+                    socket.shutdown().await.unwrap();
+                });
+                let req = Request::builder()
+                    .method("POST")
+                    .uri(if viewing { "/api/view" } else { "/api/enroll" })
+                    .header("host", "pi.lan")
+                    .header("origin", "https://pi.lan")
+                    .header("content-type", "application/cbor")
+                    .body(Body::from(payload))
+                    .unwrap();
+                let reply = router(app).oneshot(req).await.unwrap();
+                assert_eq!(reply.status(), StatusCode::OK);
+                assert_eq!(reply.headers()["content-type"], "application/cbor");
+                let bytes = to_bytes(reply.into_body(), 4096).await.unwrap();
+                assert!(matches!(
+                    v::decode_response(&bytes, &q, v::Endpoint::Web).unwrap(),
+                    v::Response::Error(v::Error::Unavailable)
+                ));
+                daemon.await.unwrap();
+            }
+        });
+    }
+    #[test]
+    fn viewing_http_rejects_cross_route_authority_and_oversized_tokens() {
+        use wudo_protocol::v2 as v;
+        runtime().block_on(async {
+            for (path, q, ep) in [
+                (
+                    "/api/view",
+                    v::Request::RegistrationBeginInsecure,
                     v::Endpoint::Web,
-                )
-                .unwrap();
-                socket.write_all(&(n as u32).to_be_bytes()).await.unwrap();
-                socket.write_all(&out[..n]).await.unwrap();
-                socket.shutdown().await.unwrap();
-            });
-            let req = Request::builder()
-                .method("POST")
-                .uri("/api/enroll")
-                .header("host", "pi.lan")
-                .header("origin", "https://pi.lan")
-                .header("content-type", "application/cbor")
-                .body(Body::from(payload))
-                .unwrap();
-            let reply = router(app).oneshot(req).await.unwrap();
-            assert_eq!(reply.status(), StatusCode::OK);
-            assert_eq!(reply.headers()["content-type"], "application/cbor");
-            let bytes = to_bytes(reply.into_body(), 4096).await.unwrap();
-            assert!(matches!(
-                v::decode_response(&bytes, &q, v::Endpoint::Web).unwrap(),
-                v::Response::Error(v::Error::Unavailable)
-            ));
-            daemon.await.unwrap();
+                ),
+                (
+                    "/api/view",
+                    v::Request::ActionBegin(v::ActionBegin {
+                        user_name: v::Name("alice"),
+                        action_id: v::Name("demo.start"),
+                    }),
+                    v::Endpoint::Web,
+                ),
+                (
+                    "/api/view",
+                    v::Request::UserList(v::UserList { after: None }),
+                    v::Endpoint::Admin,
+                ),
+                (
+                    "/api/enroll",
+                    v::Request::ViewBegin(v::ViewBegin {
+                        user_name: v::Name("alice"),
+                    }),
+                    v::Endpoint::Web,
+                ),
+            ] {
+                let mut b = vec![0; 4096];
+                let n = v::encode_request(&mut b, &q, ep).unwrap();
+                b.truncate(n);
+                let req = Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header("host", "pi.lan")
+                    .header("origin", "https://pi.lan")
+                    .header("content-type", "application/cbor")
+                    .body(Body::from(b))
+                    .unwrap();
+                assert_eq!(
+                    router(app()).oneshot(req).await.unwrap().status(),
+                    StatusCode::BAD_REQUEST
+                );
+            }
+            for (origin, len, status) in [
+                ("https://evil.lan", 0, StatusCode::FORBIDDEN),
+                ("https://pi.lan", 12289, StatusCode::PAYLOAD_TOO_LARGE),
+            ] {
+                let req = Request::builder()
+                    .method("POST")
+                    .uri("/api/view")
+                    .header("host", "pi.lan")
+                    .header("origin", origin)
+                    .header("content-type", "application/cbor")
+                    .body(Body::from(vec![0; len]))
+                    .unwrap();
+                let r = router(app()).oneshot(req).await.unwrap();
+                assert_eq!(r.status(), status);
+                assert_eq!(r.headers()["cache-control"], "no-store");
+            }
         });
     }
     #[test]

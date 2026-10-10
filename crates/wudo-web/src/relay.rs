@@ -1,4 +1,4 @@
-//! Only registration messages can cross this relay; the daemon is authoritative.
+//! Route-specific allowlists; the daemon remains the authentication authority.
 use std::{path::Path, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -7,6 +7,35 @@ use tokio::{
 use wudo_protocol::v2::{self as v, Endpoint, Request};
 
 pub const MAX_REQUEST: usize = 40960;
+#[derive(Clone, Copy)]
+pub enum Route {
+    Enrollment,
+    Viewing,
+}
+impl Route {
+    pub fn limit(self) -> usize {
+        match self {
+            Self::Enrollment => MAX_REQUEST,
+            Self::Viewing => 12288,
+        }
+    }
+    pub fn decode(self, bytes: &[u8]) -> Result<Request<'_>, ()> {
+        match self {
+            Self::Enrollment => registration(bytes),
+            Self::Viewing => {
+                let q = v::decode_request(bytes, Endpoint::Web).map_err(|_| ())?;
+                if matches!(
+                    q,
+                    Request::ViewBegin(_) | Request::ViewFinish(_) | Request::ViewActions(_)
+                ) {
+                    Ok(q)
+                } else {
+                    Err(())
+                }
+            }
+        }
+    }
+}
 pub fn registration(bytes: &[u8]) -> Result<Request<'_>, ()> {
     let q = v::decode_request(bytes, Endpoint::Web).map_err(|_| ())?;
     if !matches!(
@@ -19,8 +48,13 @@ pub fn registration(bytes: &[u8]) -> Result<Request<'_>, ()> {
     }
     Ok(q)
 }
-pub async fn exchange(path: &Path, expected_uid: u32, bytes: &[u8]) -> Result<Vec<u8>, ()> {
-    let q = registration(bytes)?;
+pub async fn exchange(
+    path: &Path,
+    expected_uid: u32,
+    bytes: &[u8],
+    route: Route,
+) -> Result<Vec<u8>, ()> {
+    let q = route.decode(bytes)?;
     tokio::time::timeout(Duration::from_secs(5), async {
         let mut s = UnixStream::connect(path).await.map_err(|_| ())?;
         let peer = rustix::net::sockopt::socket_peercred(&s).map_err(|_| ())?;
@@ -83,6 +117,31 @@ mod tests {
         assert!(registration(&encode(&Request::RegistrationBeginInsecure, Endpoint::Web)).is_ok());
     }
     #[test]
+    fn viewing_route_is_disjoint_from_enrollment_and_action_authority() {
+        let view = Request::ViewBegin(v::ViewBegin {
+            user_name: v::Name("alice"),
+        });
+        let bytes = encode(&view, Endpoint::Web);
+        assert!(Route::Viewing.decode(&bytes).is_ok());
+        assert!(Route::Enrollment.decode(&bytes).is_err());
+        for q in [
+            Request::RegistrationBeginInsecure,
+            Request::ActionBegin(v::ActionBegin {
+                user_name: v::Name("alice"),
+                action_id: v::Name("demo.start"),
+            }),
+            Request::Status,
+            Request::UserList(v::UserList { after: None }),
+        ] {
+            let ep = if q.operation().allowed(Endpoint::Admin) {
+                Endpoint::Admin
+            } else {
+                Endpoint::Web
+            };
+            assert!(Route::Viewing.decode(&encode(&q, ep)).is_err());
+        }
+    }
+    #[test]
     fn relay_checks_peer_reply_bounds_and_eof_without_retry() {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -129,8 +188,13 @@ mod tests {
                         s.shutdown().await.unwrap();
                     });
                     let uid = rustix::process::geteuid().as_raw();
-                    let result =
-                        exchange(&path, if mode == 1 { uid ^ 1 } else { uid }, &payload).await;
+                    let result = exchange(
+                        &path,
+                        if mode == 1 { uid ^ 1 } else { uid },
+                        &payload,
+                        Route::Enrollment,
+                    )
+                    .await;
                     if mode == 0 {
                         assert_eq!(result.unwrap(), expected);
                     } else {

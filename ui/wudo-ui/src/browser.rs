@@ -107,6 +107,15 @@ fn options(o: &v::CreationOptions<'_>) -> Result<web_sys::CredentialCreationOpti
     Ok(object(&[("publicKey", public.into())])?.unchecked_into())
 }
 async fn post(q: &v::Request<'_>) -> Result<Vec<u8>> {
+    let path = match q {
+        v::Request::RegistrationBegin(_)
+        | v::Request::RegistrationBeginInsecure
+        | v::Request::RegistrationFinish(_) => "/api/enroll",
+        v::Request::ViewBegin(_) | v::Request::ViewFinish(_) | v::Request::ViewActions(_) => {
+            "/api/view"
+        }
+        _ => return Err(()),
+    };
     let mut payload = vec![0; q.operation().request_limit()];
     let n = v::encode_request(&mut payload, q, v::Endpoint::Web).map_err(|_| ())?;
     let init = web_sys::RequestInit::new();
@@ -133,7 +142,7 @@ async fn post(q: &v::Request<'_>) -> Result<Vec<u8>> {
         )
         .map_err(|_| ())?;
     let result = async {
-        let response = JsFuture::from(w.fetch_with_str_and_init("/api/enroll", &init))
+        let response = JsFuture::from(w.fetch_with_str_and_init(path, &init))
             .await
             .map_err(|_| ())?
             .dyn_into::<web_sys::Response>()
@@ -321,8 +330,11 @@ fn setup() -> Result<()> {
         "status",
         "Ready. Enrollment must have been opened by your administrator.",
     );
+    viewing::setup()?;
     Ok(())
 }
+
+mod viewing;
 
 #[cfg(test)]
 mod tests {

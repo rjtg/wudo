@@ -16,6 +16,7 @@ use wudo_store::{Store, User};
 use wudod::enrollment::{Enrollment, Verified};
 
 pub(crate) enum Command {
+    Observed(Box<wudod::viewing::ObservedPage>),
     Viewing(Vec<u8>),
     ViewCompleted(Box<wudod::viewing::Verified>, Vec<u8>),
     Initialize,
@@ -155,6 +156,8 @@ impl Worker {
                 let mut viewing: Option<wudod::viewing::Viewing> = None;
                 let mut enrollment = None;
                 let mut crypto: Vec<thread::JoinHandle<()>> = Vec::new();
+                let backend = wudod::integrations::Integrations::default();
+                let mut observers: Vec<thread::JoinHandle<()>> = Vec::new();
                 let _ = ready_tx.send(Ok(()));
                 let mut failed = false;
                 while let Some(job) = rx.blocking_recv() {
@@ -171,9 +174,19 @@ impl Worker {
                             i += 1;
                         }
                     }
+                    let mut i = 0;
+                    while i < observers.len() {
+                        if observers[i].is_finished() {
+                            if observers.swap_remove(i).join().is_err() {
+                                failed = true;
+                            }
+                        } else {
+                            i += 1;
+                        }
+                    }
                     let completion = matches!(
                         &job.command,
-                        Command::Completed(..) | Command::ViewCompleted(..)
+                        Command::Completed(..) | Command::ViewCompleted(..) | Command::Observed(..)
                     );
                     if !completion && (job.reply.is_closed() || Instant::now() >= job.deadline) {
                         continue;
@@ -188,6 +201,21 @@ impl Worker {
                             v.invalidate();
                         }
                         viewing = None;
+                    }
+                    if let Command::Observed(observed) = job.command {
+                        let result = (|| {
+                            let s = store.as_ref().ok_or(Error::Unavailable)?;
+                            viewing
+                                .as_mut()
+                                .ok_or(Error::Unavailable)?
+                                .complete_observation(*observed, s, &catalog, Instant::now())
+                                .map(Reply::Encoded)
+                        })();
+                        if matches!(result, Err(Error::InternalError)) {
+                            failed = true;
+                        }
+                        let _ = job.reply.send(result);
+                        continue;
                     }
                     if let Command::Viewing(ref bytes) = job.command {
                         let preparation = (|| {
@@ -256,15 +284,61 @@ impl Worker {
                             }
                             Ok(None) => {}
                         }
+                        if matches!(
+                            wire::decode_request(bytes, wire::Endpoint::Web),
+                            Ok(wire::Request::ViewActions(_))
+                        ) {
+                            if observers.len() >= 4 {
+                                let _ = job.reply.send(Err(Error::Busy));
+                                continue;
+                            }
+                            let work = (|| {
+                                viewing.as_mut().ok_or(Error::Unavailable)?.observe(
+                                    bytes,
+                                    store.as_ref().ok_or(Error::Unavailable)?,
+                                    &catalog,
+                                    Instant::now(),
+                                )
+                            })();
+                            match work {
+                                Ok(work) => {
+                                    let backend = backend.clone();
+                                    let tx = completion_tx.clone();
+                                    match thread::Builder::new().name("wudo-observer".into()).spawn(
+                                        move || {
+                                            let observed = work.run(&backend);
+                                            if let Some(tx) = tx.upgrade() {
+                                                let _ = tx.blocking_send(Job {
+                                                    command: Command::Observed(Box::new(observed)),
+                                                    deadline: job.deadline,
+                                                    reply: job.reply,
+                                                });
+                                            }
+                                        },
+                                    ) {
+                                        Ok(handle) => observers.push(handle),
+                                        Err(_) => {
+                                            if let Some(v) = viewing.as_mut() {
+                                                v.abort_observation(bytes);
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(error) => {
+                                    if error == Error::InternalError {
+                                        failed = true;
+                                    }
+                                    let _ = job.reply.send(Err(error));
+                                }
+                            }
+                            continue;
+                        }
                         let result = (|| {
                             let s = store.as_ref().ok_or(Error::Unavailable)?;
                             let engine = viewing.as_mut().ok_or(Error::Unavailable)?;
                             match wire::decode_request(bytes, wire::Endpoint::Web)? {
                                 wire::Request::ViewBegin(_) => {
                                     engine.begin(bytes, s, Instant::now())
-                                }
-                                wire::Request::ViewActions(_) => {
-                                    engine.actions(bytes, s, &catalog, Instant::now())
                                 }
                                 _ => Err(Error::UnsupportedOperation),
                             }
@@ -402,7 +476,25 @@ impl Worker {
                 }
                 // Closing the bounded queue releases crypto senders before join.
                 // Late results never activate after shutdown.
+                backend.shutdown();
                 drop(rx);
+                let deadline = Instant::now() + std::time::Duration::from_secs(2);
+                while !observers.is_empty() && Instant::now() < deadline {
+                    let mut i = 0;
+                    while i < observers.len() {
+                        if observers[i].is_finished() {
+                            let _ = observers.swap_remove(i).join();
+                        } else {
+                            i += 1;
+                        }
+                    }
+                    if !observers.is_empty() {
+                        thread::sleep(std::time::Duration::from_millis(5));
+                    }
+                }
+                // Unreaped clients keep their resource slots in detached bounded workers.
+                // Never block daemon shutdown indefinitely on a kernel-level stuck child.
+                drop(observers);
                 for handle in crypto {
                     let _ = handle.join();
                 }

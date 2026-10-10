@@ -1,7 +1,12 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Wudo · Enroll a passkey</title><link rel="stylesheet" href="/style.css"><script type="module" src="/start.js"></script></head>
-<body><main><p class="brand">Wudo</p><h1>Enroll a passkey</h1><p>Your administrator must open enrollment before you begin.</p>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Wudo</title><link rel="stylesheet" href="/style.css"><script type="module" src="/start.js"></script></head>
+<body><main><p class="brand">Wudo</p><h1>Actions</h1>
+<label for="user-name">User name</label><input id="user-name" type="text" maxlength="64" autocomplete="username" spellcheck="false">
+<p><button id="sign-in" disabled>Sign in with passkey</button> <button id="sign-out" disabled>Sign out</button></p>
+<p id="view-status" role="status" aria-live="polite">Sign in to view your authorized actions.</p>
+<ul id="actions"></ul><p><button id="first-page" disabled>First page</button> <button id="next-page" disabled>Next page</button></p>
+<hr><h2>Enroll a passkey</h2><p>Your administrator must open enrollment before you begin.</p>
 <label for="ticket">Enrollment code</label><input id="ticket" type="password" maxlength="64" autocomplete="off" spellcheck="false"><p class="hint">Paste the code provided privately by your administrator. Never put it in a URL.</p>
 <label class="choice"><input id="insecure" type="checkbox"> My administrator opened enrollment without a code</label>
 <p class="hint">Without a code, the first valid registration wins. Use this only when your administrator explicitly enabled it.</p>

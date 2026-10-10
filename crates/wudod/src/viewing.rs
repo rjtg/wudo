@@ -21,6 +21,7 @@ struct Pending {
     state: Option<(PasskeyAuthentication, Vec<AuthenticationSnapshot>)>,
 }
 struct Session {
+    observation: Option<[u8; 32]>,
     digest: [u8; 32],
     user: UserId,
     credential: Vec<u8>,
@@ -95,6 +96,42 @@ fn encode(q: &wire::Request<'_>, r: &wire::Response<'_>) -> Result<Vec<u8>> {
         .map_err(|_| Error::InternalError)?;
     out.truncate(n);
     Ok(out)
+}
+/// An authorized page snapshot, never a client-supplied unit query.
+pub struct ObservationWork {
+    id: [u8; 32],
+    digest: [u8; 32],
+    bytes: Vec<u8>,
+    deadline: Instant,
+    targets: Vec<(String, [u8; 32], crate::integrations::ConfiguredOperation)>,
+}
+pub struct ObservedPage {
+    id: [u8; 32],
+    digest: [u8; 32],
+    bytes: Vec<u8>,
+    values: Vec<(String, [u8; 32], crate::integrations::Observation)>,
+}
+impl ObservationWork {
+    pub fn run(self, backend: &crate::integrations::Integrations) -> ObservedPage {
+        let values = self
+            .targets
+            .into_iter()
+            .map(|(id, revision, op)| {
+                let value = if Instant::now() < self.deadline {
+                    backend.observe(&op, self.deadline)
+                } else {
+                    crate::integrations::Observation::unknown()
+                };
+                (id, revision, value)
+            })
+            .collect();
+        ObservedPage {
+            id: self.id,
+            digest: self.digest,
+            bytes: self.bytes,
+            values,
+        }
+    }
 }
 impl Viewing {
     pub fn new(store: &Store, lifetime_seconds: u64) -> Result<Self> {
@@ -340,6 +377,7 @@ impl Viewing {
             return Err(Error::InternalError);
         }
         self.sessions.push(Session {
+            observation: None,
             digest,
             user: p.user,
             credential,
@@ -359,6 +397,16 @@ impl Viewing {
         store: &Store,
         config: &wudo_core::config::Config,
         now: Instant,
+    ) -> Result<Vec<u8>> {
+        self.page(bytes, store, config, now, None)
+    }
+    fn page(
+        &mut self,
+        bytes: &[u8],
+        store: &Store,
+        config: &wudo_core::config::Config,
+        now: Instant,
+        observed: Option<&ObservedPage>,
     ) -> Result<Vec<u8>> {
         let q = wire::decode_request(bytes, wire::Endpoint::Web)?;
         let wire::Request::ViewActions(v) = &q else {
@@ -381,8 +429,11 @@ impl Viewing {
             self.sessions.remove(i);
             return Err(Error::Unavailable);
         }
-        if s.last_poll
-            .is_some_and(|last| now.saturating_duration_since(last) < Duration::from_secs(2))
+        if observed.is_none()
+            && (s.observation.is_some()
+                || s.last_poll.is_some_and(|last| {
+                    now.saturating_duration_since(last) < Duration::from_secs(2)
+                }))
         {
             return Err(Error::Busy);
         }
@@ -390,7 +441,9 @@ impl Viewing {
         if remaining_ms == 0 {
             return Err(Error::Unavailable);
         }
-        s.last_poll = Some(now);
+        if observed.is_none() {
+            s.last_poll = Some(now);
+        }
         let page = store
             .list_grants(s.user, v.after.map(|a| a.0))
             .map_err(store_error)?
@@ -403,16 +456,22 @@ impl Viewing {
                 .find(|(id, _)| id.as_str() == item.id)
                 .map(|(_, a)| a)
                 .ok_or(Error::Unavailable)?;
+            let observation = observed.and_then(|p| {
+                p.values
+                    .iter()
+                    .find(|(id, rev, _)| id == &item.id && rev == &item.revision)
+                    .map(|(_, _, v)| v)
+            });
             rows.push(wire::ViewAction {
                 action_id: wire::Name(&item.id),
                 description: wire::Text(&item.description),
                 revision: wire::Blob(&item.revision),
                 confirmation: action.confirmation,
-                state: wire::UnitState::Unknown,
+                state: observation.map_or(wire::UnitState::Unknown, |o| o.state),
                 availability: if crate::integrations::ConfiguredOperation::from_action(action)
                     .is_some()
                 {
-                    wire::Availability::StateUnavailable
+                    observation.map_or(wire::Availability::StateUnavailable, |o| o.availability)
                 } else {
                     wire::Availability::Unsupported
                 },
@@ -428,6 +487,83 @@ impl Viewing {
                 next_after: page.next_after.as_deref().map(wire::Name),
             }),
         )
+    }
+    pub fn observe(
+        &mut self,
+        bytes: &[u8],
+        store: &Store,
+        config: &wudo_core::config::Config,
+        now: Instant,
+    ) -> Result<ObservationWork> {
+        let page = self.actions(bytes, store, config, now)?;
+        let q = wire::decode_request(bytes, wire::Endpoint::Web)?;
+        let wire::Request::ViewActions(v) = &q else {
+            return Err(Error::UnsupportedOperation);
+        };
+        let wire::Response::ViewPage(page) = wire::decode_response(&page, &q, wire::Endpoint::Web)?
+        else {
+            return Err(Error::InternalError);
+        };
+        let digest = openssl::sha::sha256(&v.token.0);
+        let id = random()?;
+        if self.sessions.iter().any(|s| s.observation == Some(id)) {
+            return Err(Error::InternalError);
+        }
+        let mut targets = Vec::new();
+        for row in page.actions.0 {
+            let action = config
+                .actions()
+                .iter()
+                .find(|(id, _)| id.as_str() == row.action_id.0)
+                .map(|(_, a)| a)
+                .ok_or(Error::Unavailable)?;
+            if let Some(op) = crate::integrations::ConfiguredOperation::from_action(action) {
+                targets.push((
+                    row.action_id.0.to_owned(),
+                    row.revision
+                        .0
+                        .try_into()
+                        .map_err(|_| Error::InternalError)?,
+                    op,
+                ));
+            }
+        }
+        self.sessions
+            .iter_mut()
+            .find(|s| s.digest == digest)
+            .ok_or(Error::Unavailable)?
+            .observation = Some(id);
+        Ok(ObservationWork {
+            id,
+            digest,
+            bytes: bytes.to_vec(),
+            deadline: now + Duration::from_secs(2),
+            targets,
+        })
+    }
+    pub fn abort_observation(&mut self, bytes: &[u8]) {
+        if let Ok(wire::Request::ViewActions(v)) = wire::decode_request(bytes, wire::Endpoint::Web)
+        {
+            let digest = openssl::sha::sha256(&v.token.0);
+            if let Some(s) = self.sessions.iter_mut().find(|s| s.digest == digest) {
+                s.observation = None;
+            }
+        }
+    }
+    pub fn complete_observation(
+        &mut self,
+        observed: ObservedPage,
+        store: &Store,
+        config: &wudo_core::config::Config,
+        now: Instant,
+    ) -> Result<Vec<u8>> {
+        let s = self
+            .sessions
+            .iter_mut()
+            .find(|s| s.digest == observed.digest && s.observation == Some(observed.id))
+            .ok_or(Error::Unavailable)?;
+        s.observation = None;
+        self.page(&observed.bytes, store, config, now, Some(&observed))
     }
 }
 

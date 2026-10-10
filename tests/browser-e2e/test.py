@@ -115,6 +115,23 @@ http {
   }
 }
 """)
+    catalog = Path("/etc/wudo")
+    catalog.mkdir(mode=0o755, exist_ok=True)
+    (catalog / "actions.toml").write_text('''schema_version = 2
+[actions."demo.start"]
+description = "Start demo"
+confirmation = true
+[actions."demo.start".operation]
+kind = "systemd-start"
+unit = "wudo-e2e-demo.service"
+[actions."hidden.stop"]
+description = "Hidden action"
+confirmation = true
+[actions."hidden.stop".operation]
+kind = "systemd-stop"
+unit = "wudo-e2e-demo.service"
+''')
+    (catalog / "actions.toml").chmod(0o644)
     stage = "daemon and service startup"
     service = daemon()
     cli("init", "--origin", ORIGIN)
@@ -276,8 +293,34 @@ http {
         expect(page.locator("#status")).to_have_text(re.compile(r"Passkey enrolled\..*"), timeout=15000)
         second = field(page.locator("#identity").inner_text(), "Credential ID")
         check(second != credential and "State: active" in cli("credential", "show", "alice", second), "explicit insecure enrollment activates a new credential")
+        stage = "read-only browser passkey sign-in"
+        cli("grant", "alice", "demo.start")
+        page.locator("#user-name").fill("alice")
+        page.locator("#sign-in:enabled").click()
+        expect(page.locator("#view-status")).to_have_text(re.compile(r"Signed in\..*"), timeout=15000)
+        expect(page.locator("#actions")).to_contain_text("Start demo")
+        check("Hidden action" not in page.locator("#actions").inner_text(), "ungranted actions are hidden")
+        check(page.evaluate("localStorage.length === 0 && sessionStorage.length === 0")
+              and not context.cookies(), "viewing session is not persisted in browser storage or cookies")
+        stage = "grant removal during browser polling"
+        cli("revoke", "alice", "demo.start")
+        expect(page.locator("#actions")).to_have_text("No actions are currently authorized.", timeout=15000)
+        check(True, "polling reflects grant removal")
+        stage = "reload discards browser session"
+        page.reload()
+        expect(page.locator("#sign-in")).to_be_enabled()
+        expect(page.locator("#actions")).to_be_empty()
+        check(True, "reload requires fresh sign-in")
+        page.locator("#user-name").fill("alice")
+        page.locator("#sign-in:enabled").click()
+        expect(page.locator("#view-status")).to_have_text(re.compile(r"Signed in\..*"), timeout=15000)
+        stage = "revoked browser sign-in credential"
+        cli("credential", "revoke", "alice", second)
+        expect(page.locator("#view-status")).to_have_text("Viewing session unavailable. Sign in again.", timeout=15000)
+        expect(page.locator("#actions")).to_be_empty()
+        check(True, "revoked credential invalidates browser viewing session")
         browser.close()
-    print("Browser enrollment E2E passed.")
+    print("Browser enrollment and viewing E2E passed.")
 
 
 if __name__ == "__main__":

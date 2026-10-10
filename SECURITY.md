@@ -253,10 +253,10 @@ Require explicit review before:
 The web service serves a Rust/WASM enrollment UI behind a same-host HTTPS proxy,
 listens only on loopback and refuses root execution. The HTTP origin/host
 allowlist is defense in depth, not WebAuthn authority: the daemon independently
-uses the installation identity configured by root. HTTP accepts only the three
-existing registration operations, with bounded bodies, connections and deadlines;
+uses the installation identity configured by root. HTTP uses separate allowlists for the three registration operations and the three
+read-only viewing operations, with bounded bodies, connections and deadlines;
 there is no generic administrative or action relay. Browser tickets use POST
-bodies only and are not persisted. No reusable authorization sessions are added.
+bodies only and are not persisted. Viewing tokens grant reads only, never action authorization.
 See [the browser contract](docs/browser-enrollment.md) for limits and deployment.
 
 ## WebAuthn client-data extensibility
@@ -283,7 +283,7 @@ Enrolling a passkey creates no grant. These administrative handlers do not yet
 enable action authentication or execution.
 
 
-## Agreed next systemd slice (not yet implemented)
+## Systemd execution contract (submission not yet implemented)
 
 See [the execution contract](docs/systemd-execution-contract.md). A daemon-verified
 viewing session may list authorized actions and poll state, but never authorize
@@ -319,7 +319,11 @@ and enrollment/viewing share bounded ceremony and verifier admission. Reset and
 restart invalidate viewing state. Running verification keeps its capacity lease
 until completion/drop, even after cancellation.
 
-HTTP/WASM viewing support and asynchronous systemd observations remain pending.
-Daemon viewing pages currently disable all actions. Action authentication and
-submission are not enabled. See docs/viewing-session-proposal.md for the current
+HTTP/WASM viewing and asynchronous systemd observations are implemented. The
+relay allowlists only view.begin/view.finish/view.actions on /api/view. Tokens
+remain in WASM memory, are cleared on sign-out/navigation/error/expiry, and do not
+authorize actions. Observation workers are bounded to four with a two-second page
+budget; completion rechecks session, credentials and current grants/revisions.
+Only fixed read-only systemctl show queries are connected. Action authentication
+and submission are not enabled; the UI displays availability without invocation controls. See docs/viewing-session-proposal.md for the current
 implementation boundary and remaining integration requirements.

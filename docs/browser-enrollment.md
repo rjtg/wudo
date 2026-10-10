@@ -169,3 +169,18 @@ insecure mode, cancellation, expiry, origin mismatch and lost-reply recovery
 still require a target-device deployment check. Do not equate synthetic verifier
 or WASM adapter tests with browser/authenticator compatibility. ARM and PRF
 validation remain separate. The deferred inner-CBOR rules remain deferred.
+
+
+## Viewing actions
+
+The same page also supports a separate passkey sign-in to list current authorized
+actions and their observed availability. Sign-in does not authorize execution.
+The /api/view route, session limits and polling behavior are specified in
+[the viewing contract](viewing-session-proposal.md). Enrollment remains on
+/api/enroll and never accepts viewing or action operations.
+
+Run `python3 scripts/browser-e2e.py` to exercise enrollment and viewing in the
+disposable browser container; `--debug` enables synthetic diagnostic output.
+The harness covers grant removal, reload requiring a fresh sign-in, and revoked
+sign-in credentials. It does not start/stop host services or establish real-device
+compatibility.

@@ -286,3 +286,99 @@ fn stale_snapshot_and_invalid_signature_cannot_create_sessions() {
     ));
     assert_eq!(f.engine.sessions.len(), 1);
 }
+
+fn observed(work: ObservationWork) -> ObservedPage {
+    ObservedPage {
+        id: work.id,
+        digest: work.digest,
+        bytes: work.bytes,
+        values: work
+            .targets
+            .into_iter()
+            .map(|(id, revision, _)| {
+                (
+                    id,
+                    revision,
+                    crate::integrations::Observation {
+                        state: wire::UnitState::Active,
+                        availability: wire::Availability::Available,
+                    },
+                )
+            })
+            .collect(),
+    }
+}
+#[test]
+fn observation_completion_rechecks_grants_credentials_reset_and_expiry() {
+    for mode in 0..6 {
+        let mut f = fixture();
+        let now = Instant::now();
+        let mut config = wudo_core::config::Config::parse(include_bytes!(
+            "../../../../examples/paperless.v2.actions.toml"
+        ))
+        .unwrap();
+        f.store.reconcile_actions(&config).unwrap();
+        f.store.set_grant(f.user, "paperless.stop", true).unwrap();
+        let session = login(&mut f, now);
+        let q = wire::Request::ViewActions(wire::ViewActions {
+            token: session.token,
+            after: None,
+        });
+        let bytes = bytes(&q);
+        let work = f.engine.observe(&bytes, &f.store, &config, now).unwrap();
+        assert_eq!(work.targets.len(), 1);
+        assert!(matches!(
+            f.engine
+                .observe(&bytes, &f.store, &config, now + Duration::from_secs(3)),
+            Err(Error::Busy)
+        ));
+        match mode {
+            1 => {
+                f.store.set_grant(f.user, "paperless.stop", false).unwrap();
+            }
+            2 => {
+                f.store.revoke_credential(&f.credential).unwrap();
+            }
+            3 => f.engine.invalidate(),
+            5 => {
+                config = wudo_core::config::Config::parse(
+                    include_str!("../../../../examples/paperless.v2.actions.toml")
+                        .replace("paperless.service", "other.service")
+                        .as_bytes(),
+                )
+                .unwrap();
+                f.store.reconcile_actions(&config).unwrap();
+                f.store.set_grant(f.user, "paperless.stop", true).unwrap();
+            }
+            _ => {}
+        }
+        let at = if mode == 4 {
+            now + Duration::from_secs(300)
+        } else {
+            now + Duration::from_secs(1)
+        };
+        let result = f
+            .engine
+            .complete_observation(observed(work), &f.store, &config, at);
+        if (2..=4).contains(&mode) {
+            assert!(matches!(result, Err(Error::Unavailable)));
+        } else {
+            let result = result.unwrap();
+            let wire::Response::ViewPage(p) =
+                wire::decode_response(&result, &q, wire::Endpoint::Web).unwrap()
+            else {
+                panic!("page")
+            };
+            assert_eq!(p.actions.0.len(), if mode == 1 { 0 } else { 1 });
+            if mode == 5 {
+                assert_eq!(
+                    p.actions.0[0].availability,
+                    wire::Availability::StateUnavailable
+                );
+            }
+            if mode == 0 {
+                assert_eq!(p.actions.0[0].availability, wire::Availability::Available);
+            }
+        }
+    }
+}

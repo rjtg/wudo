@@ -211,3 +211,15 @@ schema 1. Existing stored v1 records remain readable for reconciliation; nonempt
 legacy startup files require explicit upgrade. Root must regrant changed actions.
 Action submissions get a separate transport budget accommodating the configured
 acknowledgement timeout; ordinary sign-in/status exchanges remain short.
+
+
+## Observation runtime integration
+
+Read-only observations are now connected to viewing pages through at most four
+worker threads and a two-second total page budget. Shutdown signals collection
+to terminate/reap its own systemctl client, waits at most two seconds for workers,
+and retains unreaped slots in bounded detached workers. Submission remains
+unconnected. Added isolated executable-leaf tests cover ownership, modes,
+symlinks, directory/FIFO rejection and access ACLs; collection tests also cover
+shutdown cancellation. Real root-path/distro/systemd compatibility and alias/job
+E2E tests remain required; synthetic fixtures do not replace them.

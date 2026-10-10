@@ -5,7 +5,10 @@ use std::{
     io::Read,
     os::fd::AsFd,
     process::{Command, Stdio},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 use wudo_core::config::{Action, Operation};
@@ -13,6 +16,7 @@ use wudo_protocol::v2::{Availability, UnitState};
 
 #[derive(Clone)]
 pub struct Integrations {
+    stopping: Arc<AtomicBool>,
     shared: Arc<Mutex<Shared>>,
 }
 #[derive(Default)]
@@ -92,6 +96,7 @@ pub enum Submission {
 impl Default for Integrations {
     fn default() -> Self {
         Self {
+            stopping: Arc::new(AtomicBool::new(false)),
             shared: Arc::new(Mutex::new(Shared::default())),
         }
     }
@@ -187,6 +192,9 @@ fn trusted_executable() -> Result<std::os::fd::OwnedFd, ()> {
             fd = fs::openat(&fd, c, flags, Mode::empty()).map_err(|_| ())?;
         }
     }
+    trusted_leaf(&fd, 0)
+}
+fn trusted_leaf(fd: impl AsFd, uid: u32) -> Result<std::os::fd::OwnedFd, ()> {
     let leaf = fs::openat(
         &fd,
         "systemctl",
@@ -195,7 +203,7 @@ fn trusted_executable() -> Result<std::os::fd::OwnedFd, ()> {
     )
     .map_err(|_| ())?;
     let s = fs::fstat(&leaf).map_err(|_| ())?;
-    if s.st_uid != 0
+    if s.st_uid != uid
         || s.st_mode & 0o6022 != 0
         || s.st_mode & 0o111 == 0
         || fs::FileType::from_raw_mode(s.st_mode) != fs::FileType::RegularFile
@@ -233,13 +241,16 @@ impl From<()> for CallFailure {
     }
 }
 impl Integrations {
+    pub fn shutdown(&self) {
+        self.stopping.store(true, Ordering::Release);
+    }
     fn call(
         &self,
         verb: &str,
         unit: &str,
         deadline: Instant,
     ) -> Result<(bool, Vec<u8>), CallFailure> {
-        if !unit_name(unit) || Instant::now() >= deadline {
+        if !unit_name(unit) || Instant::now() >= deadline || self.stopping.load(Ordering::Acquire) {
             return Err(CallFailure::BeforeSpawn);
         }
         let executable = trusted_executable()?;
@@ -256,18 +267,19 @@ impl Integrations {
         if Instant::now() >= deadline {
             return Err(CallFailure::BeforeSpawn);
         }
-        let result = collect(&mut command, deadline).and_then(|result| {
-            let after = trusted_executable().map_err(|_| CallFailure::AfterSpawn)?;
-            let after = fs::fstat(&after).map_err(|_| CallFailure::AfterSpawn)?;
-            if before.st_dev != after.st_dev
-                || before.st_ino != after.st_ino
-                || before.st_ctime != after.st_ctime
-                || before.st_ctime_nsec != after.st_ctime_nsec
-            {
-                return Err(CallFailure::AfterSpawn);
-            }
-            Ok(result)
-        });
+        let result =
+            collect_with_stop(&mut command, deadline, Some(&self.stopping)).and_then(|result| {
+                let after = trusted_executable().map_err(|_| CallFailure::AfterSpawn)?;
+                let after = fs::fstat(&after).map_err(|_| CallFailure::AfterSpawn)?;
+                if before.st_dev != after.st_dev
+                    || before.st_ino != after.st_ino
+                    || before.st_ctime != after.st_ctime
+                    || before.st_ctime_nsec != after.st_ctime_nsec
+                {
+                    return Err(CallFailure::AfterSpawn);
+                }
+                Ok(result)
+            });
         drop(slot);
         result
     }
@@ -379,8 +391,16 @@ mod tests {
     }
 }
 
+#[cfg(test)]
 fn collect(command: &mut Command, deadline: Instant) -> Result<(bool, Vec<u8>), CallFailure> {
-    if Instant::now() >= deadline {
+    collect_with_stop(command, deadline, None)
+}
+fn collect_with_stop(
+    command: &mut Command,
+    deadline: Instant,
+    stop: Option<&AtomicBool>,
+) -> Result<(bool, Vec<u8>), CallFailure> {
+    if Instant::now() >= deadline || stop.is_some_and(|s| s.load(Ordering::Acquire)) {
         return Err(CallFailure::BeforeSpawn);
     }
     let mut child = command.spawn().map_err(|_| CallFailure::BeforeSpawn)?;
@@ -393,7 +413,7 @@ fn collect(command: &mut Command, deadline: Instant) -> Result<(bool, Vec<u8>), 
         }
         let (mut stdout, mut total, mut eof_out, mut eof_err) = (Vec::new(), 0usize, false, false);
         loop {
-            if Instant::now() >= deadline {
+            if Instant::now() >= deadline || stop.is_some_and(|s| s.load(Ordering::Acquire)) {
                 return Err(());
             }
             for (reader, eof, keep) in [
@@ -506,6 +526,34 @@ mod process_tests {
             collect(
                 &mut Command::new("/nonexistent/wudo-test-fixture"),
                 Instant::now() + Duration::from_secs(1)
+            ),
+            Err(CallFailure::BeforeSpawn)
+        ));
+    }
+    #[test]
+    fn shutdown_stops_client_collection_and_rejects_new_launches() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let signal = stop.clone();
+        let thread = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            signal.store(true, Ordering::Release);
+        });
+        let start = Instant::now();
+        assert!(
+            collect_with_stop(
+                &mut fixture("timeout"),
+                start + Duration::from_secs(30),
+                Some(&stop)
+            )
+            .is_err()
+        );
+        thread.join().unwrap();
+        assert!(start.elapsed() < Duration::from_secs(5));
+        assert!(matches!(
+            collect_with_stop(
+                &mut fixture("both"),
+                Instant::now() + Duration::from_secs(5),
+                Some(&stop)
             ),
             Err(CallFailure::BeforeSpawn)
         ));
@@ -657,5 +705,59 @@ mod command_tests {
                 .targets
                 .insert("canonical.service".into())
         );
+    }
+}
+
+#[cfg(test)]
+mod trust_tests {
+    use super::*;
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    #[test]
+    fn executable_leaf_rejects_symlinks_modes_types_owner_and_acls() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("systemctl");
+        let fd = fs::open(d.path(), OFlags::RDONLY | OFlags::DIRECTORY, Mode::empty()).unwrap();
+        let uid = rustix::process::geteuid().as_raw();
+        std::fs::write(&path, b"fixture, never executed").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(trusted_leaf(&fd, uid).is_ok());
+        assert!(trusted_leaf(&fd, uid ^ 1).is_err());
+        for mode in [0o600, 0o720, 0o702, 0o4700, 0o2700] {
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+            assert!(trusted_leaf(&fd, uid).is_err());
+        }
+        std::fs::remove_file(&path).unwrap();
+        symlink("missing", &path).unwrap();
+        assert!(trusted_leaf(&fd, uid).is_err());
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        assert!(trusted_leaf(&fd, uid).is_err());
+        std::fs::remove_dir(&path).unwrap();
+        fs::mkfifoat(&fd, "systemctl", Mode::RUSR | Mode::WUSR).unwrap();
+        assert!(trusted_leaf(&fd, uid).is_err());
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, b"fixture").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let leaf = fs::open(&path, OFlags::RDONLY, Mode::empty()).unwrap();
+        let mut acl = 2u32.to_le_bytes().to_vec();
+        for (tag, perm, id) in [
+            (1u16, 7u16, u32::MAX),
+            (2, 4, uid ^ 1),
+            (4, 0, u32::MAX),
+            (16, 4, u32::MAX),
+            (32, 0, u32::MAX),
+        ] {
+            acl.extend(tag.to_le_bytes());
+            acl.extend(perm.to_le_bytes());
+            acl.extend(id.to_le_bytes());
+        }
+        fs::fsetxattr(
+            &leaf,
+            "system.posix_acl_access",
+            &acl,
+            fs::XattrFlags::empty(),
+        )
+        .unwrap();
+        assert!(trusted_leaf(&fd, uid).is_err());
     }
 }
