@@ -29,6 +29,7 @@ struct Opportunity {
 enum Stage {
     Open,
     Pending {
+        lease: crate::ceremony_budget::Lease,
         id: wire::CeremonyId,
         deadline: Instant,
         state: PasskeyRegistration,
@@ -44,6 +45,7 @@ enum Stage {
 }
 /// In-memory opportunities disappear on restart. Use one instance per daemon.
 pub struct Enrollment {
+    budgets: crate::ceremony_budget::Budgets,
     origin: wire::InstallationOrigin,
     verifier: Arc<Webauthn>,
     opportunities: Vec<Opportunity>,
@@ -59,6 +61,8 @@ impl Drop for Permit {
 /// with its result after running. A dropped job leaves its opportunity busy
 /// until opportunity expiry or cancellation, never active.
 pub struct Verification {
+    _ceremony: crate::ceremony_budget::Lease,
+    _crypto: crate::ceremony_budget::Lease,
     verifier: Arc<Webauthn>,
     enrollment: wire::EnrollmentId,
     ceremony: wire::CeremonyId,
@@ -67,6 +71,8 @@ pub struct Verification {
     _permit: Permit,
 }
 pub struct Verified {
+    _ceremony: crate::ceremony_budget::Lease,
+    _crypto: crate::ceremony_budget::Lease,
     enrollment: wire::EnrollmentId,
     ceremony: wire::CeremonyId,
     result: Result<Passkey>,
@@ -87,6 +93,8 @@ impl Verification {
                 }
             });
         Verified {
+            _ceremony: self._ceremony,
+            _crypto: self._crypto,
             enrollment: self.enrollment,
             ceremony: self.ceremony,
             result,
@@ -128,6 +136,9 @@ fn encoded(
 impl Enrollment {
     /// Construct solely from durable root-configured installation settings.
     pub fn new(store: &Store) -> Result<Self> {
+        Self::with_budgets(store, crate::ceremony_budget::Budgets::default())
+    }
+    pub fn with_budgets(store: &Store, budgets: crate::ceremony_budget::Budgets) -> Result<Self> {
         let origin = store
             .installation_origin()
             .map_err(store_error)?
@@ -141,6 +152,7 @@ impl Enrollment {
             .build()
             .map_err(|_| Error::InternalError)?;
         Ok(Self {
+            budgets,
             origin,
             verifier: Arc::new(verifier),
             opportunities: Vec::new(),
@@ -340,6 +352,7 @@ impl Enrollment {
                 if !matches!(o.stage, Stage::Open) {
                     return Err(Error::Busy);
                 }
+                let lease = self.budgets.ceremony(o.user)?;
                 let ids = store.enrollment_credentials(o.user).map_err(store_error)?;
                 let user = store
                     .user_by_id(o.user)
@@ -368,6 +381,7 @@ impl Enrollment {
                     }),
                 )?;
                 o.stage = Stage::Pending {
+                    lease,
                     id,
                     deadline,
                     state,
@@ -394,6 +408,7 @@ impl Enrollment {
             .find(|o| matches!(&o.stage,Stage::Pending{id,..} if *id == v.ceremony_id))
             .ok_or(Error::Unavailable)?;
         let Stage::Pending {
+            lease,
             id,
             deadline,
             state,
@@ -407,9 +422,12 @@ impl Enrollment {
             })
             .map_err(|_| Error::Busy)?;
         let permit = Permit(self.workers.clone());
+        let crypto = self.budgets.crypto(o.user)?;
         let response = adapter::response(&v)?;
         o.stage = Stage::Verifying { id, deadline };
         Ok(Verification {
+            _ceremony: lease,
+            _crypto: crypto,
             verifier: self.verifier.clone(),
             enrollment: o.id,
             ceremony: id,

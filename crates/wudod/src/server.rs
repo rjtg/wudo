@@ -64,6 +64,9 @@ async fn exchange_with_store(
             (_, Some(client)) => {
                 use crate::storage::Command;
                 let command = match &request {
+                    v2::Request::ViewBegin(_)
+                    | v2::Request::ViewFinish(_)
+                    | v2::Request::ViewActions(_) => Some(Command::Viewing(payload.clone())),
                     v2::Request::StoreInitialize => Some(Command::Initialize),
                     v2::Request::InstallationInitialize(v) => {
                         Some(Command::Configure(v.origin.0.into()))
@@ -623,3 +626,6 @@ mod administration_tests {
 
 #[cfg(test)]
 mod enrollment_tests;
+
+#[cfg(test)]
+mod viewing_tests;

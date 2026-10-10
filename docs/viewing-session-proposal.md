@@ -205,3 +205,31 @@ add `outcome-unknown` alongside `accepted`. The ID is correlation only, not a
 systemd job ID or a promise of execution-history lookup. Neither outcome is
 service completion or health. This codec support does not enable daemon handlers,
 authentication, sessions, HTTP routes or UI controls; those remain pending.
+
+## Daemon state and IPC implementation
+
+Daemon `view.begin`, `view.finish`, and `view.actions` handlers are implemented.
+They use the root-configured lifetime, owner-bound credential snapshots, the
+established verifier, and serialized durable metadata commits before token issue.
+Single-use state is specific to viewing: action/registration finish cannot consume
+it. Sessions retain token digests only, have absolute deadlines and fixed capacity,
+and recheck active credentials/current grants on reads. Reset invalidates pending
+and active state before attempting the mutation; restart retains neither.
+
+Enrollment and viewing now share lease-based ceremony (32 globally, 2 per user)
+and crypto (2 globally) capacity. Running jobs retain leases across cancellation
+and reset until their results are dropped/completed. The existing worker thread
+limit and bounded queue remain in place; no crypto runs on the I/O thread.
+
+This slice deliberately returns unknown/state-unavailable for supported systemd
+operations and unknown/unsupported for other operations/prerequisites. It does
+not launch backend queries or submissions. HTTP routes and WASM sign-in/polling
+are not connected yet. The next integration must recheck credentials and grants
+after asynchronous observations before releasing results. Shared action ceremony
+admission must use these same budgets when action handlers are added.
+
+Validation includes signed soft-authenticator tests for replay, purpose isolation,
+wrong origin/signature, expiry, stale snapshots, revocation before commit, grant
+removal, throttling, reservations and orphan-session capacity; daemon IPC tests
+exercise sign-in, revocation, reset and restart-scoped tokens. This is synthetic
+verification and IPC evidence, not browser or real-authenticator validation.

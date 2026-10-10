@@ -16,6 +16,8 @@ use wudo_store::{Store, User};
 use wudod::enrollment::{Enrollment, Verified};
 
 pub(crate) enum Command {
+    Viewing(Vec<u8>),
+    ViewCompleted(Box<wudod::viewing::Verified>, Vec<u8>),
     Initialize,
     Administration(Vec<u8>),
     Configure(String),
@@ -97,10 +99,24 @@ impl Worker {
     pub(crate) fn start(path: PathBuf, anchor: Option<std::os::fd::OwnedFd>) -> Result<Self, ()> {
         Self::start_configured(path, anchor, wudo_core::config::Config::empty())
     }
+    #[cfg(test)]
     pub(crate) fn start_configured(
         path: PathBuf,
         anchor: Option<std::os::fd::OwnedFd>,
         catalog: wudo_core::config::Config,
+    ) -> Result<Self, ()> {
+        Self::start_with_settings(
+            path,
+            anchor,
+            catalog,
+            wudo_core::settings::Settings::default(),
+        )
+    }
+    fn start_with_settings(
+        path: PathBuf,
+        anchor: Option<std::os::fd::OwnedFd>,
+        catalog: wudo_core::config::Config,
+        settings: wudo_core::settings::Settings,
     ) -> Result<Self, ()> {
         let (tx, mut rx) = mpsc::channel::<Job>(4);
         let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
@@ -135,6 +151,8 @@ impl Worker {
                         }
                     }
                 }
+                let budgets = wudod::ceremony_budget::Budgets::default();
+                let mut viewing: Option<wudod::viewing::Viewing> = None;
                 let mut enrollment = None;
                 let mut crypto: Vec<thread::JoinHandle<()>> = Vec::new();
                 let _ = ready_tx.send(Ok(()));
@@ -153,13 +171,135 @@ impl Worker {
                             i += 1;
                         }
                     }
-                    let completion = matches!(&job.command, Command::Completed(..));
+                    let completion = matches!(
+                        &job.command,
+                        Command::Completed(..) | Command::ViewCompleted(..)
+                    );
                     if !completion && (job.reply.is_closed() || Instant::now() >= job.deadline) {
                         continue;
                     }
                     if failed || !same_directory(&path, anchor.as_ref()) {
                         failed = true;
                         let _ = job.reply.send(Err(Error::Unavailable));
+                        continue;
+                    }
+                    if matches!(&job.command, Command::Reset(_)) {
+                        if let Some(v) = viewing.as_mut() {
+                            v.invalidate();
+                        }
+                        viewing = None;
+                    }
+                    if let Command::Viewing(ref bytes) = job.command {
+                        let preparation = (|| {
+                            let s = store.as_ref().ok_or(Error::Unavailable)?;
+                            if s.needs_upgrade().map_err(map_error)? {
+                                return Err(Error::Unavailable);
+                            }
+                            if viewing.is_none() {
+                                viewing = Some(wudod::viewing::Viewing::with_budgets(
+                                    s,
+                                    settings.view_session_seconds,
+                                    budgets.clone(),
+                                )?);
+                            }
+                            let engine = viewing.as_mut().ok_or(Error::Unavailable)?;
+                            match wire::decode_request(bytes, wire::Endpoint::Web)? {
+                                wire::Request::ViewFinish(v) => Ok(Some((
+                                    engine.take_finish(bytes, Instant::now())?,
+                                    v.ceremony_id,
+                                ))),
+                                _ => Ok(None),
+                            }
+                        })();
+                        match preparation {
+                            Ok(Some((task, id))) => {
+                                if crypto.len() >= 2 {
+                                    if let Some(v) = viewing.as_mut() {
+                                        v.abort_verification(id);
+                                    }
+                                    let _ = job.reply.send(Err(Error::Busy));
+                                    continue;
+                                }
+                                let tx = completion_tx.clone();
+                                let bytes = bytes.clone();
+                                let result = thread::Builder::new()
+                                    .name("wudo-view-verifier".into())
+                                    .spawn(move || {
+                                        let verified = task.run();
+                                        if let Some(tx) = tx.upgrade() {
+                                            let _ = tx.blocking_send(Job {
+                                                command: Command::ViewCompleted(
+                                                    Box::new(verified),
+                                                    bytes,
+                                                ),
+                                                deadline: job.deadline,
+                                                reply: job.reply,
+                                            });
+                                        }
+                                    });
+                                match result {
+                                    Ok(handle) => crypto.push(handle),
+                                    Err(_) => {
+                                        if let Some(v) = viewing.as_mut() {
+                                            v.abort_verification(id);
+                                        }
+                                    }
+                                }
+                                continue;
+                            }
+                            Err(error) => {
+                                if error == Error::InternalError {
+                                    failed = true;
+                                }
+                                let _ = job.reply.send(Err(error));
+                                continue;
+                            }
+                            Ok(None) => {}
+                        }
+                        let result = (|| {
+                            let s = store.as_ref().ok_or(Error::Unavailable)?;
+                            let engine = viewing.as_mut().ok_or(Error::Unavailable)?;
+                            match wire::decode_request(bytes, wire::Endpoint::Web)? {
+                                wire::Request::ViewBegin(_) => {
+                                    engine.begin(bytes, s, Instant::now())
+                                }
+                                wire::Request::ViewActions(_) => {
+                                    engine.actions(bytes, s, &catalog, Instant::now())
+                                }
+                                _ => Err(Error::UnsupportedOperation),
+                            }
+                            .map(Reply::Encoded)
+                        })();
+                        if matches!(result, Err(Error::InternalError)) {
+                            failed = true;
+                        }
+                        let _ = job.reply.send(result);
+                        continue;
+                    }
+                    if let Command::ViewCompleted(verified, bytes) = job.command {
+                        let result = (|| {
+                            let s = store.as_mut().ok_or(Error::Unavailable)?;
+                            let session = viewing.as_mut().ok_or(Error::Unavailable)?.complete(
+                                *verified,
+                                s,
+                                Instant::now(),
+                            )?;
+                            let q = wire::decode_request(&bytes, wire::Endpoint::Web)?;
+                            let mut out = vec![0; 4096];
+                            let n = wire::encode_response(
+                                &mut out,
+                                &wire::Response::ViewSession(session),
+                                &q,
+                                wire::Endpoint::Web,
+                            )
+                            .map_err(|_| Error::InternalError)?;
+                            out.truncate(n);
+                            Ok(Reply::Encoded(out))
+                        })();
+                        if matches!(result, Err(Error::InternalError)) {
+                            failed = true;
+                        }
+                        let _ = job.reply.send(result);
                         continue;
                     }
                     // Finish takes state before admission to a crypto thread. SQLite
@@ -171,7 +311,7 @@ impl Worker {
                                 return Err(Error::Unavailable);
                             }
                             if enrollment.is_none() {
-                                enrollment = Some(Enrollment::new(s)?);
+                                enrollment = Some(Enrollment::with_budgets(s, budgets.clone())?);
                             }
                             let engine = enrollment.as_mut().ok_or(Error::Unavailable)?;
                             match wire::decode_request(bytes, endpoint)? {
@@ -449,8 +589,8 @@ pub(crate) fn production() -> Result<Worker, ()> {
     // SQLite NOFOLLOW rejects procfs descriptor aliases. All ancestors of this
     // fixed path were validated; root is trusted not to replace them.
     let path = PathBuf::from("/var/lib/wudo");
-    let (catalog, _settings) = actions::production()?;
-    Worker::start_configured(path, Some(fd), catalog)
+    let (catalog, settings) = actions::production()?;
+    Worker::start_with_settings(path, Some(fd), catalog, settings)
 }
 fn check_directory(fd: &std::os::fd::OwnedFd, leaf: bool) -> Result<(), ()> {
     use rustix::{fs, io::Errno};

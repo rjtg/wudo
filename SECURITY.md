@@ -308,3 +308,18 @@ No dynamic plugin loading, arbitrary operation maps, command templates or remote
 backend selection. LUKS and future integrations require explicit typed semantics
 and security review; the facade does not authorize generic privileged execution.
 Concrete backend policies remain proposed in [the backend design](docs/integration-backends.md).
+
+## Read-only viewing IPC
+
+The daemon now implements the reviewed viewing-session state and IPC contract.
+Tokens grant reads only; no token authorizes execution. Credential metadata is
+committed before issuing a memory-only token; each read rechecks expiry, active
+owner-bound credentials and current grants. Session capacity is reserved at begin,
+and enrollment/viewing share bounded ceremony and verifier admission. Reset and
+restart invalidate viewing state. Running verification keeps its capacity lease
+until completion/drop, even after cancellation.
+
+HTTP/WASM viewing support and asynchronous systemd observations remain pending.
+Daemon viewing pages currently disable all actions. Action authentication and
+submission are not enabled. See docs/viewing-session-proposal.md for the current
+implementation boundary and remaining integration requirements.
