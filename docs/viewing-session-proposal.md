@@ -242,7 +242,8 @@ sessions, sign-out, 16-row pagination, five-second visible-page polling and refr
 on visibility restoration. Navigation/reload discards the token; expiry and
 errors clear it and the displayed page. No token enters a URL, DOM text, cookie
 or browser storage. Action descriptions/status use text nodes, not HTML parsing.
-The current UI displays availability; action invocation controls remain pending.
+The UI now includes action invocation controls using fresh action-bound assertions.
+See [action execution](action-execution.md); viewing tokens remain read-only.
 
 POST /api/view has its own allowlist (the three viewing operations) and 12288-byte
 body cap. It retains same-origin headers, no-store, CSP, bounded replies, root

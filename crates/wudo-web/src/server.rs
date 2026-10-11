@@ -6,6 +6,7 @@ use axum::{
     http::{HeaderMap, HeaderValue, StatusCode},
     response::Response,
 };
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{io::Read, net::SocketAddr, path::Path, sync::Arc, time::Duration};
 use tokio::{net::TcpListener, sync::Semaphore, task::JoinSet};
 use tower::ServiceExt;
@@ -117,6 +118,7 @@ async fn handle(State(app): State<Arc<App>>, req: Request) -> Response {
     let route = match req.uri().path() {
         "/api/enroll" => relay::Route::Enrollment,
         "/api/view" => relay::Route::Viewing,
+        "/api/action" => relay::Route::Actions,
         _ => return error(StatusCode::NOT_FOUND),
     };
     if req.method() != "POST" {
@@ -133,11 +135,22 @@ async fn handle(State(app): State<Arc<App>>, req: Request) -> Response {
     {
         return error(StatusCode::UNSUPPORTED_MEDIA_TYPE);
     }
-    let Ok(bytes) = to_bytes(req.into_body(), route.limit()).await else {
+    let extended = req.extensions().get::<Arc<AtomicBool>>().cloned();
+    let Ok(Ok(bytes)) = tokio::time::timeout(
+        Duration::from_secs(5),
+        to_bytes(req.into_body(), route.limit()),
+    )
+    .await
+    else {
         return error(StatusCode::PAYLOAD_TOO_LARGE);
     };
-    if route.decode(&bytes).is_err() {
+    let Ok(request) = route.decode(&bytes) else {
         return error(StatusCode::BAD_REQUEST);
+    };
+    if matches!(request, wudo_protocol::v2::Request::ActionFinish(_))
+        && let Some(extended) = extended
+    {
+        extended.store(true, Ordering::Release);
     }
     let target = (Path::new(wudo_protocol::WEB_SOCKET), 0);
     #[cfg(test)]
@@ -186,9 +199,13 @@ pub async fn serve(address: SocketAddr, app: Arc<App>) -> Result<(), ()> {
 }
 
 async fn connection(stream: tokio::net::TcpStream, app: Router, deadline: Duration) {
-    let service = hyper::service::service_fn(move |req: hyper::Request<hyper::body::Incoming>| {
-        app.clone().oneshot(req.map(Body::new))
-    });
+    let extended = Arc::new(AtomicBool::new(false));
+    let request_extended = extended.clone();
+    let service =
+        hyper::service::service_fn(move |mut req: hyper::Request<hyper::body::Incoming>| {
+            req.extensions_mut().insert(request_extended.clone());
+            app.clone().oneshot(req.map(Body::new))
+        });
     let mut builder = hyper::server::conn::http1::Builder::new();
     builder
         .keep_alive(false)
@@ -196,11 +213,15 @@ async fn connection(stream: tokio::net::TcpStream, app: Router, deadline: Durati
         .max_buf_size(16384)
         .timer(hyper_util::rt::TokioTimer::new())
         .header_read_timeout(Duration::from_secs(3));
-    let _ = tokio::time::timeout(
-        deadline,
-        builder.serve_connection(hyper_util::rt::TokioIo::new(stream), service),
-    )
-    .await;
+    let connection = builder.serve_connection(hyper_util::rt::TokioIo::new(stream), service);
+    tokio::pin!(connection);
+    if tokio::time::timeout(deadline, &mut connection)
+        .await
+        .is_err()
+        && extended.load(Ordering::Acquire)
+    {
+        let _ = tokio::time::timeout(Duration::from_secs(40), connection).await;
+    }
 }
 
 #[cfg(test)]
@@ -226,14 +247,19 @@ mod tests {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use wudo_protocol::v2 as v;
         runtime().block_on(async {
-            for viewing in [false, true] {
+            for mode in 0..3 {
                 let dir = tempfile::tempdir().unwrap();
                 let path = dir.path().join("web.sock");
                 let listener = tokio::net::UnixListener::bind(&path).unwrap();
                 let mut app = app();
                 Arc::get_mut(&mut app).unwrap().daemon =
                     Some((path, rustix::process::geteuid().as_raw()));
-                let q = if viewing {
+                let q = if mode == 2 {
+                    v::Request::ActionBegin(v::ActionBegin {
+                        user_name: v::Name("alice"),
+                        action_id: v::Name("demo.start"),
+                    })
+                } else if mode == 1 {
                     v::Request::ViewBegin(v::ViewBegin {
                         user_name: v::Name("alice"),
                     })
@@ -270,7 +296,11 @@ mod tests {
                 });
                 let req = Request::builder()
                     .method("POST")
-                    .uri(if viewing { "/api/view" } else { "/api/enroll" })
+                    .uri(match mode {
+                        0 => "/api/enroll",
+                        1 => "/api/view",
+                        _ => "/api/action",
+                    })
                     .header("host", "pi.lan")
                     .header("origin", "https://pi.lan")
                     .header("content-type", "application/cbor")
@@ -293,6 +323,31 @@ mod tests {
         use wudo_protocol::v2 as v;
         runtime().block_on(async {
             for (path, q, ep) in [
+                (
+                    "/api/action",
+                    v::Request::ViewBegin(v::ViewBegin {
+                        user_name: v::Name("alice"),
+                    }),
+                    v::Endpoint::Web,
+                ),
+                (
+                    "/api/action",
+                    v::Request::ViewActions(v::ViewActions {
+                        token: v::ViewToken([7; 32]),
+                        after: None,
+                    }),
+                    v::Endpoint::Web,
+                ),
+                (
+                    "/api/action",
+                    v::Request::RegistrationBeginInsecure,
+                    v::Endpoint::Web,
+                ),
+                (
+                    "/api/action",
+                    v::Request::UserList(v::UserList { after: None }),
+                    v::Endpoint::Admin,
+                ),
                 (
                     "/api/view",
                     v::Request::RegistrationBeginInsecure,
@@ -387,6 +442,56 @@ mod tests {
                     );
                 }
                 server.await.unwrap();
+            }
+        });
+    }
+    #[test]
+    fn only_complete_action_finish_extends_the_connection_budget() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use wudo_protocol::v2 as v;
+        runtime().block_on(async {
+            for finish in [false, true] {
+                let dir = tempfile::tempdir().unwrap();
+                let path = dir.path().join("web.sock");
+                let daemon = tokio::net::UnixListener::bind(&path).unwrap();
+                let mut app = app();
+                Arc::get_mut(&mut app).unwrap().daemon = Some((path, rustix::process::geteuid().as_raw()));
+                let q = if finish {
+                    v::Request::ActionFinish(v::ActionFinish {
+                        ceremony_id: v::CeremonyId([7;32]), credential_id: v::Blob(b"credential"),
+                        client_data: v::Blob(br#"{"type":"webauthn.get","challenge":"test","origin":"https://pi.lan"}"#),
+                        authenticator_data: v::Blob(&[0;37]), signature: v::Blob(b"signature"), user_handle: None,
+                    })
+                } else { v::Request::ActionBegin(v::ActionBegin { user_name: v::Name("alice"), action_id: v::Name("demo.start") }) };
+                let mut payload = vec![0; 4096];
+                let n = v::encode_request(&mut payload, &q, v::Endpoint::Web).unwrap();
+                payload.truncate(n);
+                let daemon = tokio::spawn(async move {
+                    let (mut socket, _) = daemon.accept().await.unwrap();
+                    let mut bytes = Vec::new();
+                    socket.read_to_end(&mut bytes).await.unwrap();
+                    let q = v::decode_request(&bytes[4..], v::Endpoint::Web).unwrap();
+                    let mut out = [0;4096];
+                    let n = v::encode_response(&mut out, &v::Response::Error(v::Error::Unavailable), &q, v::Endpoint::Web).unwrap();
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                    let _ = socket.write_all(&(n as u32).to_be_bytes()).await;
+                    let _ = socket.write_all(&out[..n]).await;
+                });
+                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let address = listener.local_addr().unwrap();
+                let server = tokio::spawn(async move {
+                    let (stream, _) = listener.accept().await.unwrap();
+                    connection(stream, router(app), Duration::from_millis(100)).await;
+                });
+                let mut client = tokio::net::TcpStream::connect(address).await.unwrap();
+                let header = format!("POST /api/action HTTP/1.1\r\nHost: pi.lan\r\nOrigin: https://pi.lan\r\nContent-Type: application/cbor\r\nContent-Length: {}\r\n\r\n", payload.len());
+                client.write_all(header.as_bytes()).await.unwrap();
+                client.write_all(&payload).await.unwrap();
+                let mut out = Vec::new();
+                tokio::time::timeout(Duration::from_secs(2), client.read_to_end(&mut out)).await.unwrap().unwrap();
+                if finish { assert!(out.starts_with(b"HTTP/1.1 200 OK")); } else { assert!(out.is_empty()); }
+                server.await.unwrap();
+                daemon.await.unwrap();
             }
         });
     }

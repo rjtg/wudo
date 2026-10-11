@@ -300,6 +300,8 @@ unit = "wudo-e2e-demo.service"
         expect(page.locator("#view-status")).to_have_text(re.compile(r"Signed in\..*"), timeout=15000)
         expect(page.locator("#actions")).to_contain_text("Start demo")
         check("Hidden action" not in page.locator("#actions").inner_text(), "ungranted actions are hidden")
+        expect(page.locator('#actions button[data-action="demo.start"]')).to_be_disabled()
+        check(True, "unavailable systemd action remains disabled")
         check(page.evaluate("localStorage.length === 0 && sessionStorage.length === 0")
               and not context.cookies(), "viewing session is not persisted in browser storage or cookies")
         stage = "grant removal during browser polling"

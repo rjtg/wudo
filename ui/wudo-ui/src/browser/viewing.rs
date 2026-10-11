@@ -1,6 +1,7 @@
 use super::*;
 use std::{cell::RefCell, rc::Rc};
 struct Session {
+    name: String,
     token: v::ViewToken,
     expires: f64,
     after: Option<String>,
@@ -17,6 +18,7 @@ struct State {
     generation: u64,
     signing: bool,
     polling: bool,
+    executing: bool,
 }
 type Shared = Rc<RefCell<State>>;
 fn now() -> Result<f64> {
@@ -55,6 +57,7 @@ fn clear(state: &Shared, message: &str) {
     s.generation = s.generation.wrapping_add(1);
     s.signing = false;
     s.polling = false;
+    s.executing = false;
     text("actions", "");
     text("view-status", message);
     controls(&s);
@@ -79,21 +82,31 @@ fn bounded(b: js_sys::ArrayBuffer, min: usize, max: usize) -> Result<Vec<u8>> {
     }
     Ok(Uint8Array::new(&b).to_vec())
 }
-async fn sign_in(name: String) -> Result<Session> {
-    let q = v::Request::ViewBegin(v::ViewBegin {
-        user_name: v::Name(&name),
-    });
-    let reply = post(&q).await?;
-    let v::Response::ActionChallenge(c) =
-        v::decode_response(&reply, &q, v::Endpoint::Web).map_err(|_| ())?
-    else {
-        return Err(());
-    };
+struct Assertion {
+    id: Vec<u8>,
+    data: Vec<u8>,
+    auth: Vec<u8>,
+    signature: Vec<u8>,
+    user: Option<v::UserId>,
+}
+impl Assertion {
+    fn finish(&self, ceremony_id: v::CeremonyId) -> v::ActionFinish<'_> {
+        v::ActionFinish {
+            ceremony_id,
+            credential_id: v::Blob(&self.id),
+            client_data: v::Blob(&self.data),
+            authenticator_data: v::Blob(&self.auth),
+            signature: v::Blob(&self.signature),
+            user_handle: self.user,
+        }
+    }
+}
+async fn assertion(options: &v::RequestOptions<'_>) -> Result<Assertion> {
     let credential = JsFuture::from(
         window()?
             .navigator()
             .credentials()
-            .get_with_options(&request_options(&c.options)?)
+            .get_with_options(&request_options(options)?)
             .map_err(|_| ())?,
     )
     .await
@@ -112,18 +125,31 @@ async fn sign_in(name: String) -> Result<Session> {
         .user_handle()
         .map(|b| bounded(b, 16, 16).and_then(|b| Ok(v::UserId(b.try_into().map_err(|_| ())?))))
         .transpose()?;
-    let q = v::Request::ViewFinish(v::ActionFinish {
-        ceremony_id: c.ceremony_id,
-        credential_id: v::Blob(&id),
-        client_data: v::Blob(&data),
-        authenticator_data: v::Blob(&auth),
-        signature: v::Blob(&signature),
-        user_handle: user,
+    Ok(Assertion {
+        id,
+        data,
+        auth,
+        signature,
+        user,
+    })
+}
+async fn sign_in(name: String) -> Result<Session> {
+    let q = v::Request::ViewBegin(v::ViewBegin {
+        user_name: v::Name(&name),
     });
+    let reply = post(&q).await?;
+    let v::Response::ActionChallenge(c) =
+        v::decode_response(&reply, &q, v::Endpoint::Web).map_err(|_| ())?
+    else {
+        return Err(());
+    };
+    let assertion = assertion(&c.options).await?;
+    let q = v::Request::ViewFinish(assertion.finish(c.ceremony_id));
     let started = now()?;
     let mut reply = post(&q).await?;
     let session = match v::decode_response(&reply, &q, v::Endpoint::Web).map_err(|_| ())? {
         v::Response::ViewSession(s) => Session {
+            name,
             token: s.token,
             expires: started + s.remaining_ms.0 as f64,
             after: None,
@@ -158,10 +184,24 @@ fn render(page: &v::ViewPage<'_>) -> Result<()> {
         let row = doc.create_element("li").map_err(|_| ())?;
         let label = doc.create_element("strong").map_err(|_| ())?;
         label.set_text_content(Some(a.description.0));
+        let run = doc
+            .create_element("button")
+            .map_err(|_| ())?
+            .dyn_into::<HtmlButtonElement>()
+            .map_err(|_| ())?;
+        run.set_text_content(Some("Run"));
+        run.set_disabled(a.availability != v::Availability::Available);
+        run.set_attribute("data-action", a.action_id.0)
+            .map_err(|_| ())?;
+        run.set_attribute("data-description", a.description.0)
+            .map_err(|_| ())?;
+        run.set_attribute("data-confirm", if a.confirmation { "yes" } else { "no" })
+            .map_err(|_| ())?;
         let state = doc.create_element("span").map_err(|_| ())?;
         state.set_text_content(Some(reason(a.availability)));
         row.append_child(&label).map_err(|_| ())?;
         row.append_child(&state).map_err(|_| ())?;
+        row.append_child(&run).map_err(|_| ())?;
         root.append_child(&row).map_err(|_| ())?;
     }
     Ok(())
@@ -181,7 +221,7 @@ fn poll(state: &Shared) {
     }
     let (token, after, generation) = {
         let mut s = state.borrow_mut();
-        if s.polling {
+        if s.polling || s.executing {
             return;
         }
         let Some(session) = s.session.as_ref() else {
@@ -249,9 +289,130 @@ fn poll(state: &Shared) {
         }
     });
 }
+fn current(state: &Shared, generation: u64) -> bool {
+    let s = state.borrow();
+    s.generation == generation
+        && s.session
+            .as_ref()
+            .is_some_and(|session| now().is_ok_and(|n| n < session.expires))
+}
+async fn invoke(state: &Shared, generation: u64, name: &str, action: &str) -> &'static str {
+    // Failures before sending finish cannot have submitted an action.
+    let prepared = async {
+        let q = v::Request::ActionBegin(v::ActionBegin {
+            user_name: v::Name(name),
+            action_id: v::Name(action),
+        });
+        let reply = post(&q).await?;
+        let v::Response::ActionChallenge(c) =
+            v::decode_response(&reply, &q, v::Endpoint::Web).map_err(|_| ())?
+        else {
+            return Err(());
+        };
+        if !current(state, generation) {
+            return Err(());
+        }
+        let assertion = assertion(&c.options).await?;
+        if !current(state, generation) {
+            return Err(());
+        }
+        Ok((assertion, c.ceremony_id))
+    }
+    .await;
+    let Ok((assertion, id)) = prepared else {
+        return "Action was not submitted. Refresh and try again when ready.";
+    };
+    text("action-status", "Submitting action…");
+    let q = v::Request::ActionFinish(assertion.finish(id));
+    let reply = post(&q).await;
+    let response = reply
+        .as_ref()
+        .ok()
+        .and_then(|b| v::decode_response(b, &q, v::Endpoint::Web).ok());
+    match response {
+        Some(v::Response::Admitted(v::Admitted {
+            state: v::Accepted::Accepted,
+            ..
+        })) => {
+            "Request accepted. Current unit state will refresh; acceptance does not mean completion."
+        }
+        Some(v::Response::Error(v::Error::Busy)) => {
+            "Action was not submitted: busy. Refresh before trying again."
+        }
+        Some(v::Response::Error(_)) => {
+            "Action unavailable or acceptance could not be confirmed. Check current state before trying again."
+        }
+        _ => {
+            "Could not confirm acceptance. The action may have run. Check current state before deciding whether to try again."
+        }
+    }
+}
+fn action_click(state: &Shared, event: web_sys::Event) {
+    let Some(button) = event
+        .target()
+        .and_then(|t| t.dyn_into::<HtmlButtonElement>().ok())
+    else {
+        return;
+    };
+    if button.disabled() || hidden() {
+        return;
+    }
+    let Some(action) = button.get_attribute("data-action") else {
+        return;
+    };
+    let (name, generation) = {
+        let s = state.borrow();
+        if s.polling || s.executing {
+            return;
+        }
+        let Some(session) = s.session.as_ref() else {
+            return;
+        };
+        (session.name.clone(), s.generation)
+    };
+    if !current(state, generation) {
+        clear(state, "Session expired. Sign in again.");
+        return;
+    }
+    if button.get_attribute("data-confirm").as_deref() == Some("yes") {
+        let description = button.get_attribute("data-description").unwrap_or_default();
+        if !window()
+            .and_then(|w| {
+                w.confirm_with_message(&format!("Run {description}?"))
+                    .map_err(|_| ())
+            })
+            .unwrap_or(false)
+        {
+            return;
+        }
+    }
+    state.borrow_mut().executing = true;
+    text("actions", "");
+    text(
+        "action-status",
+        "Use your passkey to authorize this action.",
+    );
+    let shared = state.clone();
+    spawn_local(async move {
+        let outcome = invoke(&shared, generation, &name, &action).await;
+        if shared.borrow().generation != generation {
+            return;
+        }
+        shared.borrow_mut().executing = false;
+        text("action-status", outcome);
+        poll(&shared);
+    });
+}
 pub(super) fn setup() -> Result<()> {
     let state = Rc::new(RefCell::new(State::default()));
     controls(&state.borrow());
+    let action_state = state.clone();
+    let action =
+        Closure::<dyn FnMut(web_sys::Event)>::new(move |event| action_click(&action_state, event));
+    element("actions")?
+        .add_event_listener_with_callback("click", action.as_ref().unchecked_ref())
+        .map_err(|_| ())?;
+    action.forget();
     let shared = state.clone();
     let click = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| {
         if shared.borrow().signing || shared.borrow().session.is_some() {
@@ -304,7 +465,7 @@ pub(super) fn setup() -> Result<()> {
         let shared = state.clone();
         let click = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| {
             let mut s = shared.borrow_mut();
-            if s.polling {
+            if s.polling || s.executing {
                 return;
             }
             if let Some(session) = s.session.as_mut() {

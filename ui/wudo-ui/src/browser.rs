@@ -114,6 +114,7 @@ async fn post(q: &v::Request<'_>) -> Result<Vec<u8>> {
         v::Request::ViewBegin(_) | v::Request::ViewFinish(_) | v::Request::ViewActions(_) => {
             "/api/view"
         }
+        v::Request::ActionBegin(_) | v::Request::ActionFinish(_) => "/api/action",
         _ => return Err(()),
     };
     let mut payload = vec![0; q.operation().request_limit()];
@@ -138,7 +139,11 @@ async fn post(q: &v::Request<'_>) -> Result<Vec<u8>> {
     let timer = w
         .set_timeout_with_callback_and_timeout_and_arguments_0(
             abort.as_ref().unchecked_ref(),
-            10000,
+            if matches!(q, v::Request::ActionFinish(_)) {
+                55000
+            } else {
+                10000
+            },
         )
         .map_err(|_| ())?;
     let result = async {

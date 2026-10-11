@@ -15,7 +15,21 @@ use wudo_protocol::v2::{self as wire, Error};
 use wudo_store::{Store, User};
 use wudod::enrollment::{Enrollment, Verified};
 
+type AdmissionReply = (
+    Result<wudod::action_auth::Admitted, Error>,
+    oneshot::Sender<Result<Reply, Error>>,
+);
+enum ActionPreparation {
+    Challenge(Vec<u8>),
+    Verify(Box<wudod::action_auth::Verification>, wire::CeremonyId),
+}
 pub(crate) enum Command {
+    Action(Vec<u8>),
+    ActionCompleted(Box<wudod::action_auth::Verified>, Vec<u8>),
+    ActionReady(
+        Box<wudod::action_auth::Ready>,
+        std::sync::mpsc::SyncSender<AdmissionReply>,
+    ),
     Observed(Box<wudod::viewing::ObservedPage>),
     Viewing(Vec<u8>),
     ViewCompleted(Box<wudod::viewing::Verified>, Vec<u8>),
@@ -154,6 +168,7 @@ impl Worker {
                 }
                 let budgets = wudod::ceremony_budget::Budgets::default();
                 let mut viewing: Option<wudod::viewing::Viewing> = None;
+                let mut action_auth: Option<wudod::action_auth::Actions> = None;
                 let mut enrollment = None;
                 let mut crypto: Vec<thread::JoinHandle<()>> = Vec::new();
                 let backend = wudod::integrations::Integrations::default();
@@ -186,7 +201,11 @@ impl Worker {
                     }
                     let completion = matches!(
                         &job.command,
-                        Command::Completed(..) | Command::ViewCompleted(..) | Command::Observed(..)
+                        Command::Completed(..)
+                            | Command::ViewCompleted(..)
+                            | Command::Observed(..)
+                            | Command::ActionCompleted(..)
+                            | Command::ActionReady(..)
                     );
                     if !completion && (job.reply.is_closed() || Instant::now() >= job.deadline) {
                         continue;
@@ -201,6 +220,181 @@ impl Worker {
                             v.invalidate();
                         }
                         viewing = None;
+                        if let Some(a) = action_auth.as_mut() {
+                            a.invalidate();
+                        }
+                        action_auth = None;
+                    }
+                    if let Command::ActionReady(ready, decision) = job.command {
+                        let result = (|| {
+                            if job.reply.is_closed() || Instant::now() >= job.deadline {
+                                return Err(Error::Unavailable);
+                            }
+                            action_auth.as_mut().ok_or(Error::Unavailable)?.admit(
+                                *ready,
+                                store.as_ref().ok_or(Error::Unavailable)?,
+                                Instant::now(),
+                            )
+                        })();
+                        if matches!(result, Err(Error::InternalError)) {
+                            failed = true;
+                        }
+                        // Nonblocking, capacity-one channel: admission is serialized here.
+                        // The backend worker already holds its slot and canonical guard.
+                        let _ = decision.try_send((result, job.reply));
+                        continue;
+                    }
+                    if let Command::ActionCompleted(verified, bytes) = job.command {
+                        let result = (|| {
+                            let auth = action_auth.as_mut().ok_or(Error::Unavailable)?.complete(
+                                *verified,
+                                store.as_mut().ok_or(Error::Unavailable)?,
+                                Instant::now(),
+                            )?;
+                            if job.reply.is_closed() || Instant::now() >= job.deadline {
+                                return Err(Error::Unavailable);
+                            }
+                            if observers.len() >= 4 {
+                                return Err(Error::Busy);
+                            }
+                            Ok(auth)
+                        })();
+                        match result {
+                            Ok(auth) => {
+                                let backend = backend.clone();
+                                let tx = completion_tx.clone();
+                                let ack = std::time::Duration::from_secs(
+                                    settings.systemctl_ack_timeout_seconds,
+                                );
+                                let handle = thread::Builder::new()
+                                    .name("wudo-action-backend".into())
+                                    .spawn(move || {
+                                        let ready = match auth.prepare(&backend) {
+                                            Ok(ready) => ready,
+                                            Err(error) => {
+                                                let _ = job.reply.send(Err(error));
+                                                return;
+                                            }
+                                        };
+                                        let (decision, receive) = std::sync::mpsc::sync_channel(1);
+                                        let Some(tx) = tx.upgrade() else {
+                                            return;
+                                        };
+                                        if tx
+                                            .blocking_send(Job {
+                                                command: Command::ActionReady(
+                                                    Box::new(ready),
+                                                    decision,
+                                                ),
+                                                deadline: job.deadline,
+                                                reply: job.reply,
+                                            })
+                                            .is_err()
+                                        {
+                                            return;
+                                        }
+                                        // The owner always handles this completion, including expired/cancelled requests.
+                                        // Shutdown drops the queue and decision sender, releasing this bounded worker.
+                                        let Ok((admitted, reply)) = receive.recv() else {
+                                            return;
+                                        };
+                                        let result = (|| {
+                                            let admitted = admitted?;
+                                            let response = admitted.submit(&backend, ack)?;
+                                            let q =
+                                                wire::decode_request(&bytes, wire::Endpoint::Web)?;
+                                            let mut out = vec![0; q.operation().response_limit()];
+                                            let n = wire::encode_response(
+                                                &mut out,
+                                                &wire::Response::Admitted(response),
+                                                &q,
+                                                wire::Endpoint::Web,
+                                            )
+                                            .map_err(|_| Error::InternalError)?;
+                                            out.truncate(n);
+                                            Ok(Reply::Encoded(out))
+                                        })();
+                                        let _ = reply.send(result);
+                                    });
+                                if let Ok(handle) = handle {
+                                    observers.push(handle);
+                                }
+                            }
+                            Err(error) => {
+                                if error == Error::InternalError {
+                                    failed = true;
+                                }
+                                let _ = job.reply.send(Err(error));
+                            }
+                        }
+                        continue;
+                    }
+                    if let Command::Action(ref bytes) = job.command {
+                        let result = (|| {
+                            let s = store.as_ref().ok_or(Error::Unavailable)?;
+                            if s.needs_upgrade().map_err(map_error)? {
+                                return Err(Error::Unavailable);
+                            }
+                            if action_auth.is_none() {
+                                action_auth = Some(wudod::action_auth::Actions::with_budgets(
+                                    s,
+                                    budgets.clone(),
+                                )?);
+                            }
+                            let engine = action_auth.as_mut().ok_or(Error::Unavailable)?;
+                            match wire::decode_request(bytes, wire::Endpoint::Web)? {
+                                wire::Request::ActionBegin(_) => Ok(ActionPreparation::Challenge(
+                                    engine.begin(bytes, s, &catalog, Instant::now())?,
+                                )),
+                                wire::Request::ActionFinish(v) => {
+                                    let task = engine.take_finish(bytes, Instant::now())?;
+                                    if crypto.len() >= 2 {
+                                        engine.abort_verification(v.ceremony_id);
+                                        return Err(Error::Busy);
+                                    }
+                                    Ok(ActionPreparation::Verify(Box::new(task), v.ceremony_id))
+                                }
+                                _ => Err(Error::UnsupportedOperation),
+                            }
+                        })();
+                        match result {
+                            Ok(ActionPreparation::Challenge(bytes)) => {
+                                let _ = job.reply.send(Ok(Reply::Encoded(bytes)));
+                            }
+                            Ok(ActionPreparation::Verify(task, id)) => {
+                                let tx = completion_tx.clone();
+                                let bytes = bytes.clone();
+                                match thread::Builder::new()
+                                    .name("wudo-action-verifier".into())
+                                    .spawn(move || {
+                                        let verified = task.run();
+                                        if let Some(tx) = tx.upgrade() {
+                                            let _ = tx.blocking_send(Job {
+                                                command: Command::ActionCompleted(
+                                                    Box::new(verified),
+                                                    bytes,
+                                                ),
+                                                deadline: job.deadline,
+                                                reply: job.reply,
+                                            });
+                                        }
+                                    }) {
+                                    Ok(handle) => crypto.push(handle),
+                                    Err(_) => {
+                                        if let Some(a) = action_auth.as_mut() {
+                                            a.abort_verification(id);
+                                        }
+                                    }
+                                }
+                            }
+                            Err(error) => {
+                                if error == Error::InternalError {
+                                    failed = true;
+                                }
+                                let _ = job.reply.send(Err(error));
+                            }
+                        }
+                        continue;
                     }
                     if let Command::Observed(observed) = job.command {
                         let result = (|| {

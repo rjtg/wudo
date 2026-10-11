@@ -307,7 +307,7 @@ Authentication, authorization, action revisions and admission remain daemon-owne
 No dynamic plugin loading, arbitrary operation maps, command templates or remote
 backend selection. LUKS and future integrations require explicit typed semantics
 and security review; the facade does not authorize generic privileged execution.
-Concrete backend policies remain proposed in [the backend design](docs/integration-backends.md).
+Concrete backend policies and their follow-up approvals are recorded in [the backend design](docs/integration-backends.md).
 
 ## Read-only viewing IPC
 
@@ -324,6 +324,9 @@ relay allowlists only view.begin/view.finish/view.actions on /api/view. Tokens
 remain in WASM memory, are cleared on sign-out/navigation/error/expiry, and do not
 authorize actions. Observation workers are bounded to four with a two-second page
 budget; completion rechecks session, credentials and current grants/revisions.
-Only fixed read-only systemctl show queries are connected. Action authentication
-and submission are not enabled; the UI displays availability without invocation controls. See docs/viewing-session-proposal.md for the current
+Action authentication and submission now use separate single-use ceremonies,
+serialized final admission and fixed systemctl start/stop operations. The UI
+requires a fresh passkey assertion per invocation; viewing tokens cannot authorize
+execution. See docs/action-execution.md for the admission boundary, transport
+budgets and remaining real-systemd validation. See docs/viewing-session-proposal.md for the current
 implementation boundary and remaining integration requirements.

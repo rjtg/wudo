@@ -29,15 +29,43 @@ async fn exchange_with_store(
     deadline: Instant,
 ) -> Result<(), ()> {
     use wudo_protocol::v2;
-    let mut header = [0; 4];
-    stream.read_exact(&mut header).await.map_err(|_| ())?;
-    let len = v2::payload_len(header).map_err(|_| ())?;
-    let mut payload = vec![0; len];
-    stream.read_exact(&mut payload).await.map_err(|_| ())?;
-    let mut extra = [0];
-    if stream.read(&mut extra).await.map_err(|_| ())? != 0 {
-        return Err(());
-    }
+    // Slow headers, payloads and missing half-close retain the original short budget.
+    let payload = timeout_at(deadline, async {
+        let mut header = [0; 4];
+        stream.read_exact(&mut header).await.map_err(|_| ())?;
+        let len = v2::payload_len(header).map_err(|_| ())?;
+        let mut payload = vec![0; len];
+        stream.read_exact(&mut payload).await.map_err(|_| ())?;
+        if stream.read(&mut [0]).await.map_err(|_| ())? != 0 {
+            return Err(());
+        }
+        Ok(payload)
+    })
+    .await
+    .map_err(|_| ())??;
+    let deadline = if matches!(
+        v2::decode_request(&payload, endpoint),
+        Ok(v2::Request::ActionFinish(_))
+    ) {
+        Instant::now() + Duration::from_secs(35)
+    } else {
+        deadline
+    };
+    timeout_at(
+        deadline,
+        respond(stream, endpoint, storage, deadline, payload),
+    )
+    .await
+    .map_err(|_| ())?
+}
+async fn respond(
+    mut stream: UnixStream,
+    endpoint: wudo_protocol::v2::Endpoint,
+    storage: Option<crate::storage::Client>,
+    deadline: Instant,
+    payload: Vec<u8>,
+) -> Result<(), ()> {
+    use wudo_protocol::v2;
     let version = v2::envelope_version(&payload).map_err(|_| ())?;
     let bytes = if version == 2 {
         let request = match v2::decode_request(&payload, endpoint) {
@@ -64,6 +92,9 @@ async fn exchange_with_store(
             (_, Some(client)) => {
                 use crate::storage::Command;
                 let command = match &request {
+                    v2::Request::ActionBegin(_) | v2::Request::ActionFinish(_) => {
+                        Some(Command::Action(payload.clone()))
+                    }
                     v2::Request::ViewBegin(_)
                     | v2::Request::ViewFinish(_)
                     | v2::Request::ViewActions(_) => Some(Command::Viewing(payload.clone())),
@@ -145,7 +176,7 @@ async fn exchange_with_store(
             out
         }
     } else {
-        if len > MAX_PAYLOAD {
+        if payload.len() > MAX_PAYLOAD {
             return Err(());
         }
         let response = match decode_request(&payload) {
@@ -184,11 +215,7 @@ fn admit(
     tasks.spawn(async move {
         let _permit = permit;
         // Dropping the reply receiver cancels queued work, never a started transaction.
-        let _ = timeout_at(
-            deadline,
-            exchange_with_store(stream, endpoint, storage, deadline),
-        )
-        .await;
+        let _ = exchange_with_store(stream, endpoint, storage, deadline).await;
     });
 }
 

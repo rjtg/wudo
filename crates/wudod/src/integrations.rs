@@ -69,6 +69,27 @@ pub struct Prepared {
     operation: ConfiguredOperation,
     _guard: TargetGuard,
 }
+#[cfg(test)]
+impl Prepared {
+    pub(crate) fn fixture() -> Self {
+        let shared = Arc::new(Mutex::new(Shared::default()));
+        shared
+            .lock()
+            .unwrap()
+            .targets
+            .insert("fixture.service".into());
+        Self {
+            operation: ConfiguredOperation::Systemd {
+                unit: "fixture.service".into(),
+                start: true,
+            },
+            _guard: TargetGuard {
+                shared,
+                id: "fixture.service".into(),
+            },
+        }
+    }
+}
 struct TargetGuard {
     shared: Arc<Mutex<Shared>>,
     id: String,

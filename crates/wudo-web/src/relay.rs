@@ -11,17 +11,26 @@ pub const MAX_REQUEST: usize = 40960;
 pub enum Route {
     Enrollment,
     Viewing,
+    Actions,
 }
 impl Route {
     pub fn limit(self) -> usize {
         match self {
             Self::Enrollment => MAX_REQUEST,
-            Self::Viewing => 12288,
+            Self::Viewing | Self::Actions => 12288,
         }
     }
     pub fn decode(self, bytes: &[u8]) -> Result<Request<'_>, ()> {
         match self {
             Self::Enrollment => registration(bytes),
+            Self::Actions => {
+                let q = v::decode_request(bytes, Endpoint::Web).map_err(|_| ())?;
+                if matches!(q, Request::ActionBegin(_) | Request::ActionFinish(_)) {
+                    Ok(q)
+                } else {
+                    Err(())
+                }
+            }
             Self::Viewing => {
                 let q = v::decode_request(bytes, Endpoint::Web).map_err(|_| ())?;
                 if matches!(
@@ -55,31 +64,38 @@ pub async fn exchange(
     route: Route,
 ) -> Result<Vec<u8>, ()> {
     let q = route.decode(bytes)?;
-    tokio::time::timeout(Duration::from_secs(5), async {
-        let mut s = UnixStream::connect(path).await.map_err(|_| ())?;
-        let peer = rustix::net::sockopt::socket_peercred(&s).map_err(|_| ())?;
-        if peer.uid.as_raw() != expected_uid {
-            return Err(());
-        }
-        s.write_all(&(bytes.len() as u32).to_be_bytes())
-            .await
-            .map_err(|_| ())?;
-        s.write_all(bytes).await.map_err(|_| ())?;
-        s.shutdown().await.map_err(|_| ())?;
-        let mut header = [0; 4];
-        s.read_exact(&mut header).await.map_err(|_| ())?;
-        let n = v::payload_len(header).map_err(|_| ())?;
-        if n > q.operation().response_limit() {
-            return Err(());
-        }
-        let mut out = vec![0; n];
-        s.read_exact(&mut out).await.map_err(|_| ())?;
-        if s.read(&mut [0]).await.map_err(|_| ())? != 0 {
-            return Err(());
-        }
-        v::decode_response(&out, &q, Endpoint::Web).map_err(|_| ())?;
-        Ok(out)
-    })
+    tokio::time::timeout(
+        Duration::from_secs(if matches!(q, Request::ActionFinish(_)) {
+            40
+        } else {
+            5
+        }),
+        async {
+            let mut s = UnixStream::connect(path).await.map_err(|_| ())?;
+            let peer = rustix::net::sockopt::socket_peercred(&s).map_err(|_| ())?;
+            if peer.uid.as_raw() != expected_uid {
+                return Err(());
+            }
+            s.write_all(&(bytes.len() as u32).to_be_bytes())
+                .await
+                .map_err(|_| ())?;
+            s.write_all(bytes).await.map_err(|_| ())?;
+            s.shutdown().await.map_err(|_| ())?;
+            let mut header = [0; 4];
+            s.read_exact(&mut header).await.map_err(|_| ())?;
+            let n = v::payload_len(header).map_err(|_| ())?;
+            if n > q.operation().response_limit() {
+                return Err(());
+            }
+            let mut out = vec![0; n];
+            s.read_exact(&mut out).await.map_err(|_| ())?;
+            if s.read(&mut [0]).await.map_err(|_| ())? != 0 {
+                return Err(());
+            }
+            v::decode_response(&out, &q, Endpoint::Web).map_err(|_| ())?;
+            Ok(out)
+        },
+    )
     .await
     .map_err(|_| ())?
 }

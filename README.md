@@ -147,4 +147,4 @@ Reviewed architecture/security decisions remain in the repository documents.
 
 The [offline configuration contract](docs/configuration-proposal.md) and
 [Paperless TOML example](examples/paperless.actions.toml) describe schema v1.
-Trusted startup loading and local grants are implemented; action execution remains unimplemented.
+Trusted startup loading, local grants, viewing sessions and fresh-passkey systemd start/stop submission are implemented. See [action execution](docs/action-execution.md) for semantics and outstanding real-systemd/browser validation. LUKS and secret transport remain unimplemented.

@@ -1,8 +1,10 @@
 # First systemd action execution contract
 
 Status: user-facing policies below were agreed with the maintainer in the design
-walkthrough. This document consolidates those decisions for review; runtime is
-not implemented. Technical details explicitly marked open are not implied approvals.
+walkthrough. Runtime authentication, viewing, admission, submission and browser
+controls are implemented. See [current implementation and validation limits](action-execution.md).
+The historical technical gates below were resolved by the follow-up approvals in
+the linked viewing/backend documents; real-systemd E2E remains outstanding.
 Tracking: [#24](https://github.com/rjtg/wudo/issues/24).
 Parents: #5, #12, #16; roadmap #20. Prerequisite: action catalog and grants #23.
 
@@ -121,31 +123,14 @@ Polling is the initial transport; SSE may be added later without changing job
 ownership or authorization. Polling failure means unavailable/unknown, never an
 assumption that the unit stopped.
 
-## Technical details still to specify before implementation
+## Reviewed technical contract
 
-These are engineering follow-ups, not unresolved user-facing behavior:
-
-- Accepted: use a general compile-time integration facade, with systemctl as the
-  first systemd backend. Review concrete subprocess/deadline/parser recommendations
-  in [integration backends](integration-backends.md), including alias-safe identity
-  and pending-job checks. A future D-Bus backend must preserve the same contract.
-- Define exact daemon-owned session configuration location, accepted lifetime
-  range, token construction, session/ceremony caps, eviction and response sizes.
-  Do not introduce an unbounded session table or unauthenticated status oracle.
-- Specify strict sign-in/list/status IPC schemas, HTTP allowlist and token
-  transport, page limits, polling frequency/backpressure, and safe error mapping.
-- Define durable authentication metadata updates and concurrent assertion rules,
-  reset/revocation ordering, and the admission-to-submission lifecycle.
-- Reconcile the reserved action.finish response/operation_id with acceptance-only
-  feedback. Do not invent a receipt that is an execution token or imply a durable
-  history. Specify the reply when submission acknowledgement is uncertain.
-- Resolve existing `timeout_seconds` and `output_limit_bytes` for systemd actions.
-  They must not become service/job cancellation budgets. Communication deadlines
-  are needed, but their numbers and config migration policy are not yet approved.
-
-The earlier overall execution-timeout proposal and reserved action wire schema
-must be updated before code enables this contract. No implementation may silently
-ignore those fields or reinterpret them as health checks.
+The follow-up walkthrough approved the concrete viewing-session and backend
+policies linked below. Schema 2 removes systemd timeout/output fields; trusted
+`/etc/wudo/wudod.toml` owns viewing lifetime and acknowledgement timeout. Action
+finish distinguishes acceptance from uncertainty without persistent receipts.
+The [runtime description](action-execution.md) defines serialized metadata/admission,
+retained guards, worker bounds and separate action response deadlines.
 
 ## Implementation slices and acceptance checks
 
@@ -153,7 +138,7 @@ ignore those fields or reinterpret them as health checks.
    for concurrent verification, revocation/reset races, failures and reopen.
    Internal snapshot/commit storage API is now implemented; see
    [metadata persistence](identity-persistence-proposal.md#authentication-metadata-updates-schema-v4-no-migration).
-   Daemon ceremony/admission integration remains pending. No action handlers yet.
+   Daemon ceremony/admission integration is implemented.
 2. **Viewing-session wire/config contract and implementation:** purpose-bound
    sign-in, five-minute default, root configuration, bounded session storage,
    owner/grant-filtered pages and expiry/revocation/reset tests. Review exact
@@ -176,7 +161,7 @@ synthetic adapter tests alone do not prove a real systemd deployment works.
 
 Concrete viewing-session configuration, bounds and message recommendations are
 now collected in the [viewing-session proposal](viewing-session-proposal.md).
-They remain proposed until reviewed; no runtime handlers are enabled by it.
+The follow-up approvals and implementation status are recorded there.
 
 
 The maintainer approved typed integration-specific operations behind a shared

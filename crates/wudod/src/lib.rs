@@ -6,3 +6,5 @@ pub mod integrations;
 pub mod viewing;
 
 pub mod ceremony_budget;
+
+pub mod action_auth;

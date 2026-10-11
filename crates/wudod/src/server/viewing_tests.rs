@@ -179,3 +179,96 @@ async fn root_reset_invalidates_view_tokens_even_at_same_origin() {
         v::Response::Error(v::Error::Unavailable)
     ));
 }
+
+#[tokio::test]
+async fn action_ipc_requires_its_own_challenge_and_rechecks_current_grants() {
+    let (dir, worker, mut authenticator, user, _) = setup();
+    drop(worker);
+    let config = || {
+        wudo_core::config::Config::parse(include_bytes!(
+            "../../../../examples/paperless.v2.actions.toml"
+        ))
+        .unwrap()
+    };
+    let worker = Worker::start_configured(dir.path().into(), None, config()).unwrap();
+    let client = worker.client();
+    let begin = v::Request::ActionBegin(v::ActionBegin {
+        user_name: v::Name("alice"),
+        action_id: v::Name("paperless.stop"),
+    });
+    let reply = call(client.clone(), &begin, v::Endpoint::Web).await;
+    assert!(matches!(
+        v::decode_response(&reply, &begin, v::Endpoint::Web).unwrap(),
+        v::Response::Error(v::Error::Unavailable)
+    ));
+    let grant = v::Request::GrantCreate(v::GrantRef {
+        user_id: user,
+        action_id: v::Name("paperless.stop"),
+    });
+    call(client.clone(), &grant, v::Endpoint::Admin).await;
+    // A genuine viewing assertion cannot be reinterpreted as action authorization.
+    let (_, viewing_finish) = login(client.clone(), &mut authenticator).await;
+    let v::Request::ViewFinish(view) =
+        v::decode_request(&viewing_finish, v::Endpoint::Web).unwrap()
+    else {
+        panic!("view")
+    };
+    let q = v::Request::ActionFinish(view);
+    let reply = call(client.clone(), &q, v::Endpoint::Web).await;
+    assert!(matches!(
+        v::decode_response(&reply, &q, v::Endpoint::Web).unwrap(),
+        v::Response::Error(v::Error::Unavailable)
+    ));
+    let reply = call(client.clone(), &begin, v::Endpoint::Web).await;
+    let v::Response::ActionChallenge(c) =
+        v::decode_response(&reply, &begin, v::Endpoint::Web).unwrap()
+    else {
+        panic!("challenge")
+    };
+    let options:RequestChallengeResponse=serde_json::from_value(serde_json::json!({"publicKey":{
+        "challenge":Base64UrlSafeData::from(c.options.challenge.0.to_vec()),"rpId":c.options.rp_id.0,"timeout":120000,"userVerification":"required",
+        "allowCredentials":c.options.allow_credentials.0.iter().map(|id|serde_json::json!({"type":"public-key","id":Base64UrlSafeData::from(id.0.to_vec())})).collect::<Vec<_>>()
+    }})).unwrap();
+    let data=serde_json::to_vec(&serde_json::json!({"type":"webauthn.get","challenge":options.public_key.challenge,"origin":ORIGIN})).unwrap();
+    let response = authenticator
+        .perform_auth(
+            openssl::sha::sha256(&data).to_vec(),
+            options.public_key,
+            120000,
+        )
+        .unwrap();
+    let q = v::Request::ActionFinish(v::ActionFinish {
+        ceremony_id: c.ceremony_id,
+        credential_id: v::Blob(response.raw_id.as_ref()),
+        client_data: v::Blob(&data),
+        authenticator_data: v::Blob(response.response.authenticator_data.as_ref()),
+        signature: v::Blob(response.response.signature.as_ref()),
+        user_handle: None,
+    });
+
+    let revoke = v::Request::GrantRevoke(v::GrantRef {
+        user_id: user,
+        action_id: v::Name("paperless.stop"),
+    });
+    call(client.clone(), &revoke, v::Endpoint::Admin).await;
+    let reply = call(client.clone(), &q, v::Endpoint::Web).await;
+    assert!(matches!(
+        v::decode_response(&reply, &q, v::Endpoint::Web).unwrap(),
+        v::Response::Error(v::Error::Unavailable)
+    ));
+    call(client.clone(), &grant, v::Endpoint::Admin).await;
+    // Restoring the grant does not restore the consumed challenge.
+    let reply = call(client.clone(), &q, v::Endpoint::Web).await;
+    assert!(matches!(
+        v::decode_response(&reply, &q, v::Endpoint::Web).unwrap(),
+        v::Response::Error(v::Error::Unavailable)
+    ));
+    drop(client);
+    drop(worker);
+    let worker = Worker::start_configured(dir.path().into(), None, config()).unwrap();
+    let reply = call(worker.client(), &q, v::Endpoint::Web).await;
+    assert!(matches!(
+        v::decode_response(&reply, &q, v::Endpoint::Web).unwrap(),
+        v::Response::Error(v::Error::Unavailable)
+    ));
+}

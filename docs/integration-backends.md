@@ -182,23 +182,23 @@ Schema 2 removes timeout/output fields from systemd actions. LUKS-specific limit
 remain on LUKS actions. Nonempty schema-1 startup files require explicit upgrade;
 stored historical definitions remain readable so reconciliation invalidates grants
 on changed definitions. Settings are validated at startup; passing them into the
-future session/execution runtime remains part of the handler integration.
+session/execution runtime is implemented.
 
 The backend uses synchronous subprocess collection on dedicated workers, not the
 Tokio I/O thread. Collection deadlines kill and reap only the systemctl client.
 A reap that does not return retains its worker/resource slot and target guard;
 the daemon runtime must cap these workers and avoid joining them without a bound.
-That shutdown wiring is not implemented yet. Do not enable submission handlers
-until it is covered by integration tests.
+Shutdown wiring is implemented and covered by bounded collection/shutdown tests;
+real-systemd deployment validation remains outstanding.
 
 Implemented isolated tests cover the state matrix, strict property parsing,
 command/environment construction, rejected verbs/names, bounded dual pipe reads,
 output overflow, timeout cleanup, nonzero exit, and failed/expired launch.
 Tests use a Rust child fixture and do not start/stop host services.
 
-Still required: executable ownership/ACL/symlink fixture tests, real systemd alias
-and pending-job tests, bounded runtime shutdown, serialized final authorization,
-and browser/Pi validation. A compiled backend is not end-to-end execution support.
+Executable trust fixtures, bounded runtime shutdown and serialized final
+authorization are implemented. Still required: real systemd alias/pending-job
+tests and browser/Pi validation. A compiled backend is not end-to-end execution support.
 
 ## Follow-up review decisions (supersede earlier alternatives)
 
@@ -218,8 +218,7 @@ acknowledgement timeout; ordinary sign-in/status exchanges remain short.
 Read-only observations are now connected to viewing pages through at most four
 worker threads and a two-second total page budget. Shutdown signals collection
 to terminate/reap its own systemctl client, waits at most two seconds for workers,
-and retains unreaped slots in bounded detached workers. Submission remains
-unconnected. Added isolated executable-leaf tests cover ownership, modes,
+and retains unreaped slots in bounded detached workers. Submission now shares the bounded worker pool; see [action execution](action-execution.md). Added isolated executable-leaf tests cover ownership, modes,
 symlinks, directory/FIFO rejection and access ACLs; collection tests also cover
 shutdown cancellation. Real root-path/distro/systemd compatibility and alias/job
 E2E tests remain required; synthetic fixtures do not replace them.
