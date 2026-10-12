@@ -6,7 +6,7 @@ Wudo is a passkey-authenticated privilege broker for Linux. It lets users invoke
 
 > Users choose what to do, never what to execute.
 
-## Planned components
+## Components
 
 ```text
 Browser
@@ -34,12 +34,12 @@ wudod
 
 - **wudod** — privileged daemon, WebAuthn challenge/verification authority, and authorization enforcement point.
 - **wudo-web** — unprivileged web/API service; assume compromise.
-- **wudo-ui** — Rust/WASM browser UI served by `wudo-web`, with WebAuthn and PRF operations.
+- **wudo-ui** — Rust/WASM browser UI served by `wudo-web`, with WebAuthn operations; PRF support is planned.
 - **wudo-cli** — local bootstrap, recovery, configuration and administration.
 
 ## Initial reference use case
 
-The first concrete use case is remotely starting an encrypted Paperless installation after reboot:
+The planned reference use case is remotely starting an encrypted Paperless installation after reboot. The secret-handling and LUKS steps below are not implemented yet:
 
 1. User selects `paperless.start`.
 2. User authenticates with a passkey.
@@ -50,43 +50,64 @@ The first concrete use case is remotely starting an encrypted Paperless installa
 
 The existing human LUKS passphrase remains as a recovery mechanism.
 
-The daemon verifies actual WebAuthn responses rather than trusting web/UI claims. Authenticated end-to-end encryption protects secret transport. Malicious UI delivery by a compromised web service is an accepted risk; UI attestation is out of scope. See `SECURITY.md`.
+The daemon verifies actual WebAuthn responses rather than trusting web/UI claims. The planned secret path requires authenticated end-to-end encryption; that protocol is not implemented yet. Malicious UI delivery by a compromised web service is an accepted risk; UI attestation is out of scope. See `SECURITY.md`.
 
-## Design status
+## Implementation status
 
-This repository is intentionally design-first. See:
+Wudo is a development prototype for passkey-protected systemd start/stop actions.
+It cannot yet unlock LUKS or run the complete encrypted Paperless workflow.
 
-- `SECURITY.md`
-- `docs/architecture.md`
-- `docs/domain-model.md`
-- `docs/secrets.md`
-- `docs/luks-flow.md`
-- `docs/open-questions.md`
-- `tasks/000-roadmap.md`
+| Area | Status |
+| --- | --- |
+| Local initialization/reset, SQLite persistence and explicit upgrades | Implemented |
+| Users, passkey enrollment, credential inspection and revocation | Implemented |
+| Trusted action configuration and revision-bound user grants | Implemented |
+| Browser sign-in, authorized action listing and status polling | Implemented; viewing sessions grant reads only |
+| Fixed systemd start/stop and browser Run controls | Implemented; every invocation requires a fresh daemon-verified assertion |
+| Real-systemd action E2E and Pi/physical-authenticator validation | Outstanding |
+| PRF, secret wrappers, encrypted secret transport and provisioning | Not implemented; protocol/compatibility work remains |
+| LUKS unlock and combined Paperless start | Not implemented |
+| Audit and deployment/recovery tooling | Incomplete |
 
-Do not treat unresolved cryptographic or authorization protocol details as finalized.
+Native and WASM tests, linting and the UI build have passed for the action slice.
+The enrollment browser test has passed previously, but the expanded viewing and
+execution path still needs deployment validation. Synthetic backend tests do not
+prove real-systemd behavior. See [action execution](docs/action-execution.md) for
+implemented ordering, bounds, outcomes and remaining validation.
+
+Current work and validation evidence live in [roadmap #20](https://github.com/rjtg/wudo/issues/20)
+and [execution #24](https://github.com/rjtg/wudo/issues/24). Next is isolated
+real-systemd/browser E2E, followed by target PRF compatibility and the reviewed
+secret-handling/LUKS work. Issue counts are not a completion percentage: broader
+milestones include unfinished scope even where individual slices are implemented.
+
+The reviewed design and security baseline is in [SECURITY.md](SECURITY.md),
+[architecture](docs/architecture.md), [domain model](docs/domain-model.md),
+[secrets](docs/secrets.md) and [LUKS flow](docs/luks-flow.md). Unresolved secret
+protocol and provisioning details are not finalized by the existing runtime.
 
 ## Development
 
-The repository contains a minimal Cargo workspace using stable Rust:
+The repository contains a Cargo workspace using stable Rust:
 
 - `crates/wudo-core`: typed offline action/resource configuration and validation.
-- `crates/wudod`: Unix IPC daemon, identity storage and enrollment verification.
-- `crates/wudo-web`: bounded enrollment relay and static UI service.
+- `crates/wudod`: Unix IPC daemon, identity storage, WebAuthn verification and action admission/submission.
+- `crates/wudo-web`: bounded enrollment/viewing/action relay and static UI service.
 - `crates/wudo-cli`: local administration and offline validation, binary name `wudo`.
-- `ui/wudo-ui`: Rust/WASM passkey enrollment UI served by `wudo-web`.
+- `ui/wudo-ui`: Rust/WASM enrollment, sign-in, polling and action UI served by `wudo-web`.
 
 The daemon uses Tokio, SQLite and the established webauthn-rs verifier. It
 requires root for runtime use; ordinary Cargo tests use isolated temporary state.
-The web service relays enrollment over localhost HTTP behind an HTTPS proxy,
-and serves the Rust/WASM UI. Privileged actions and secret transport are not
-implemented yet. See [browser enrollment](docs/browser-enrollment.md) for build,
+The web service relays bounded requests over localhost HTTP behind a separate
+HTTPS proxy and serves the Rust/WASM UI. Supported runtime actions are fixed
+systemd start/stop without prerequisites or secrets. Secret transport and LUKS
+remain unimplemented. See [browser enrollment](docs/browser-enrollment.md) for build,
 proxy setup, enrollment and remaining real-device validation.
 
 Root-managed action configuration and grants are described in the
 [action/grant guide](docs/action-grants-proposal.md). This adds `wudo action list`,
 `wudo grant USER ACTION`, `wudo revoke USER ACTION` and `wudo grant list USER`.
-Existing installations require `sudo wudo upgrade` for schema 4. Configuration
+Installations with older identity schemas require `sudo wudo upgrade` for schema 4. Configuration
 changes take effect at restart and invalidate grants for changed actions.
 
 Local setup and enrollment commands are documented in
@@ -111,10 +132,12 @@ secrets. See [credential administration](docs/credential-administration-proposal
 Validate the example locally:
 
 ```text
-cargo run -p wudo-cli -- config validate --file examples/paperless.actions.toml
+cargo run -p wudo-cli -- config validate --file examples/paperless.v2.actions.toml
 ```
 
-This checks structural validity only. It does not inspect devices, query systemd,
+The schema-2 example includes planned LUKS actions, which remain unavailable at
+runtime. Its standalone systemd stop action uses the implemented operation shape.
+Validation checks structural validity only. It does not inspect devices, query systemd,
 contact the daemon, provision secrets, or install configuration. See the
 [configuration contract](docs/configuration-proposal.md) for limits and errors.
 
@@ -131,10 +154,10 @@ members forbid unsafe Rust. Commit `Cargo.lock` to keep dependency resolution
 consistent. Parser and CLI tests cover malformed/oversized input, strict schema
 and reference checks, safe diagnostics, and offline file handling.
 
-Before implementing behavior, resolve the applicable items in
-[open questions](docs/open-questions.md): configuration/state ownership, action
-execution semantics, IPC/WebAuthn ceremonies, secret transport, and crash-safe
-provisioning. None needs to be settled to build this scaffold.
+Before adding secret handling, resolve the applicable protocol, PRF and
+crash-safe provisioning decisions in the linked GitHub issues and reviewed
+specifications. Existing action/authentication policies are documented in
+[action execution](docs/action-execution.md).
 
 ## Task tracking
 
@@ -145,6 +168,7 @@ implementation work packages and the design decisions that gate them.
 Read a task with `gh issue view <number> --repo rjtg/wudo --comments`.
 Reviewed architecture/security decisions remain in the repository documents.
 
-The [offline configuration contract](docs/configuration-proposal.md) and
-[Paperless TOML example](examples/paperless.actions.toml) describe schema v1.
-Trusted startup loading, local grants, viewing sessions and fresh-passkey systemd start/stop submission are implemented. See [action execution](docs/action-execution.md) for semantics and outstanding real-systemd/browser validation. LUKS and secret transport remain unimplemented.
+The [configuration contract](docs/configuration-proposal.md#action-schema-2-and-daemon-settings)
+and [schema-2 example](examples/paperless.v2.actions.toml) describe current startup
+configuration. The original schema-1 example remains a historical parser fixture;
+nonempty schema-1 startup catalogs require explicit conversion.

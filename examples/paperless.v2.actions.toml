@@ -1,4 +1,5 @@
-# Schema v2 example; runtime operations are not yet implemented.
+# Schema v2 example. Standalone systemd start/stop is implemented.
+# LUKS unlock and the LUKS prerequisite remain unavailable at runtime.
 # This is the action/resource document, not a complete daemon configuration.
 # Replace the illustrative LUKS UUID and unit name before deployment.
 schema_version = 2

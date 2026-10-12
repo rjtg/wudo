@@ -14,13 +14,18 @@ This is a security-sensitive Rust project. Prefer small, explicit, auditable des
 
 ## Status
 
-The repository is at the design/bootstrap stage. The documents under `docs/` are the current design baseline, but unresolved items are intentionally marked as such.
+The repository contains a development prototype with identity administration,
+WebAuthn enrollment, read-only viewing sessions and passkey-authorized systemd
+start/stop submission. Real-systemd/browser action E2E and Pi validation remain
+outstanding. Secret transport, PRF, LUKS and the full Paperless workflow are not
+implemented. See `docs/action-execution.md` and roadmap issue #20 for current
+status; unresolved security-sensitive items remain explicitly marked.
 
 Do not silently resolve security-sensitive design questions while implementing. Document the decision or stop and ask for review.
 
 ## Components
 
-The intended system has four user-facing/runtime components plus shared Rust code:
+The system has four user-facing/runtime components plus shared Rust code:
 
 - `wudod`: privileged daemon, normally running as root.
 - `wudo-web`: unprivileged HTTP/API service.
